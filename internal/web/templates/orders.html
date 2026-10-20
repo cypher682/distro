@@ -4,7 +4,7 @@
     <div class="panel-head">
       <div>
         <h2>Order register</h2>
-        <p>Draft, reserved, and invoiced sales orders.</p>
+        <p>Draft, reserved, dispatched, and invoiced sales orders.</p>
       </div>
       <span class="count">{{len .Orders}} shown</span>
     </div>
@@ -29,6 +29,7 @@
             <td class="num">{{money .TotalCents}}</td>
             <td class="actions">
               {{$invoice := $.InvoiceForOrder .ID}}
+              {{$note := $.DeliveryNoteForOrder .ID}}
               {{if $invoice}}
               <a class="button button-small button-quiet" href="/invoices/{{$invoice.ID}}">Invoice</a>
               {{else if eq .Status "draft"}}
@@ -36,7 +37,15 @@
                 <button class="button button-small" type="submit">Reserve</button>
               </form>
               {{else if eq .Status "reserved"}}
-              <form method="post" action="/orders/{{.ID}}/invoice" onsubmit="return confirm('Invoice this order? Stock, COGS, and revenue will be posted.')">
+              {{if $note}}
+              <a class="button button-small button-quiet" href="/dispatch/{{$note.ID}}">Delivery</a>
+              {{else}}
+              <form method="post" action="/orders/{{.ID}}/delivery-notes">
+                <button class="button button-small" type="submit">Pick</button>
+              </form>
+              {{end}}
+              {{else if eq .Status "dispatched"}}
+              <form method="post" action="/orders/{{.ID}}/invoice" onsubmit="return confirm('Invoice this order? Receivable and revenue will be posted.')">
                 <button class="button button-small" type="submit">Invoice</button>
               </form>
               {{end}}

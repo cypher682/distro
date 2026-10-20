@@ -38,6 +38,20 @@ func testService(t *testing.T, stock int64, creditLimit int64) (*MemoryStore, *S
 	return store, NewService(store)
 }
 
+func dispatchOrder(t *testing.T, svc *Service, orderID string) DeliveryNote {
+	t.Helper()
+
+	note, err := svc.CreateDeliveryNote(context.Background(), testTenant, orderID)
+	if err != nil {
+		t.Fatalf("create delivery note: %v", err)
+	}
+	note, err = svc.DispatchDeliveryNote(context.Background(), testTenant, note.ID)
+	if err != nil {
+		t.Fatalf("dispatch delivery note: %v", err)
+	}
+	return note
+}
+
 func createOrder(t *testing.T, svc *Service, quantity int) Order {
 	t.Helper()
 
@@ -117,6 +131,7 @@ func TestInvoiceAndPaymentKeepLedgerBalanced(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
 	if err != nil {
 		t.Fatalf("invoice order: %v", err)
@@ -168,6 +183,7 @@ func TestInvoicedStockIsNotAvailableAgain(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	if _, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("invoice order: %v", err)
 	}
@@ -187,6 +203,7 @@ func TestPaymentOverpayRejected(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
 	if err != nil {
 		t.Fatalf("invoice order: %v", err)
@@ -216,6 +233,77 @@ func TestCancelReleasesReservation(t *testing.T) {
 	}
 	if level := stockLevel(t, store); level.Available != 5 || level.Reserved != 0 {
 		t.Fatalf("expected released stock, got %+v", level)
+	}
+}
+
+func TestDeliveryNotePickingCancelAndDispatch(t *testing.T) {
+	store, svc := testService(t, 5, 100000)
+	order := createOrder(t, svc, 2)
+	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
+		t.Fatalf("reserve order: %v", err)
+	}
+
+	note, err := svc.CreateDeliveryNote(context.Background(), testTenant, order.ID)
+	if err != nil {
+		t.Fatalf("create delivery note: %v", err)
+	}
+	if note.Status != "picking" || len(note.Lines) != 1 || note.TotalCostCents != 0 {
+		t.Fatalf("unexpected picking note: %+v", note)
+	}
+	if level := stockLevel(t, store); level.OnHand != 5 || level.Reserved != 2 {
+		t.Fatalf("picking must not move stock: %+v", level)
+	}
+
+	cancelled, err := svc.CancelDeliveryNote(context.Background(), testTenant, note.ID)
+	if err != nil {
+		t.Fatalf("cancel delivery note: %v", err)
+	}
+	if cancelled.Status != "cancelled" {
+		t.Fatalf("expected cancelled note, got %s", cancelled.Status)
+	}
+	if level := stockLevel(t, store); level.OnHand != 5 || level.Reserved != 2 {
+		t.Fatalf("cancelling must keep reservation: %+v", level)
+	}
+
+	note, err = svc.CreateDeliveryNote(context.Background(), testTenant, order.ID)
+	if err != nil {
+		t.Fatalf("create replacement delivery note: %v", err)
+	}
+	dispatched, err := svc.DispatchDeliveryNote(context.Background(), testTenant, note.ID)
+	if err != nil {
+		t.Fatalf("dispatch delivery note: %v", err)
+	}
+	if dispatched.Status != "dispatched" || dispatched.DispatchedAt == nil || dispatched.TotalCostCents != 0 {
+		t.Fatalf("unexpected dispatched note: %+v", dispatched)
+	}
+	if level := stockLevel(t, store); level.OnHand != 3 || level.Reserved != 0 || level.InventoryValueCents != 0 {
+		t.Fatalf("dispatch must consume stock: %+v", level)
+	}
+	if _, err := svc.DispatchDeliveryNote(context.Background(), testTenant, note.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected double dispatch conflict, got %v", err)
+	}
+
+	credit, err := svc.GetCredit(context.Background(), testTenant, testRetailer)
+	if err != nil {
+		t.Fatalf("get credit: %v", err)
+	}
+	if credit.ReservedOrderCents != 2000 || credit.ExposureCents != 2000 {
+		t.Fatalf("dispatched order must keep credit exposure: %+v", credit)
+	}
+	if _, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID); err != nil {
+		t.Fatalf("invoice dispatched order: %v", err)
+	}
+	assertLedgerBalanced(t, svc)
+}
+
+func TestInvoiceRequiresDispatch(t *testing.T) {
+	_, svc := testService(t, 5, 100000)
+	order := createOrder(t, svc, 1)
+	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
+		t.Fatalf("reserve order: %v", err)
+	}
+	if _, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected dispatch requirement, got %v", err)
 	}
 }
 
@@ -266,6 +354,7 @@ func TestInvoicePostsWeightedAverageCogs(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	if _, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("invoice order: %v", err)
 	}
@@ -298,6 +387,7 @@ func TestWeightedAverageRoundingReconcilesToZero(t *testing.T) {
 		if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 			t.Fatalf("reserve order %d: %v", i, err)
 		}
+		dispatchOrder(t, svc, order.ID)
 		if _, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID); err != nil {
 			t.Fatalf("invoice order %d: %v", i, err)
 		}
@@ -327,6 +417,7 @@ func TestSalesReturnRestocksAndReversesCogs(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
 	if err != nil {
 		t.Fatalf("invoice order: %v", err)
@@ -370,6 +461,7 @@ func TestSalesReturnNonRestockKeepsCogs(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
 	if err != nil {
 		t.Fatalf("invoice order: %v", err)
@@ -405,6 +497,7 @@ func TestSalesReturnCannotExceedInvoicedQuantity(t *testing.T) {
 	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
 		t.Fatalf("reserve order: %v", err)
 	}
+	dispatchOrder(t, svc, order.ID)
 	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
 	if err != nil {
 		t.Fatalf("invoice order: %v", err)

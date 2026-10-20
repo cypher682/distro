@@ -47,6 +47,7 @@ behavior for tests.
 | `stock_movements` | Append-only quantity and cost movements |
 | `reservations` | Active, released, or fulfilled order allocations |
 | `orders`, `order_lines` | Draft-to-invoiced sales orders |
+| `delivery_notes`, `delivery_note_lines` | Picking and dispatch documents with immutable issue-cost snapshots |
 | `invoices`, `invoice_lines` | Receivables and immutable invoice cost snapshots |
 | `payments` | Cash application |
 | `sales_returns`, `sales_return_lines` | Restocked or damaged returned goods |
@@ -59,14 +60,21 @@ mutable on-hand column.
 
 - On-hand = sum of `stock_movements.quantity_delta` for a product and warehouse.
 - Available = on-hand minus active reservations. It cannot go negative.
-- Receipts and invoices lock product rows before reading stock balances, so
-  concurrent reservations and issues serialize per product.
+- Receipts, dispatches, and invoices lock product rows before reading stock
+  balances, so concurrent reservations and issues serialize per product.
 - An order can be reserved only when stock and retailer credit are sufficient.
-- Credit exposure = unpaid invoice balances after returns plus reserved order
-  value. A fully returned paid invoice becomes a customer credit.
-- Invoice postings balance accounts receivable against revenue.
-- Invoice lines snapshot quantity, selling price, and total issue cost. This is
-  the source for exact partial-return refunds and cost reversals.
+- Credit exposure = unpaid invoice balances after returns plus the value of
+  reserved and dispatched orders. A fully returned paid invoice becomes a
+  customer credit.
+- A delivery note can be created only from a reserved order, and an order can
+  have at most one non-cancelled note. Picking does not move stock or post.
+- Dispatch fulfills reservations, writes negative stock movements at the current
+  weighted average, and posts `Dr COGS / Cr inventory`. The order becomes
+  `dispatched` and remains in credit exposure.
+- Invoice postings balance accounts receivable against revenue only. Invoicing
+  requires a dispatched order and copies delivery-note costs into immutable
+  invoice lines. Those lines are the source for exact partial-return refunds and
+  cost reversals.
 - COGS postings balance cost of goods sold against inventory.
 - Stock valuation = sum of signed movement costs and must equal the inventory
   ledger balance.
@@ -78,10 +86,13 @@ mutable on-hand column.
 - Returns cannot exceed the remaining invoiced quantity. Restocked returns debit
   inventory and credit COGS at the original invoice cost; damaged returns reduce
   the receivable but leave the cost in COGS.
+- Cancelling a picking note leaves the order reserved and its reservations
+  active. Cancelling an order also cancels any picking note.
 
 See [ADR-0002](adr/0002-core-money-and-stock.md),
-[ADR-0003](adr/0003-inventory-costing.md), and
-[ADR-0004](adr/0004-sales-returns.md) for the accounting decisions. See
+[ADR-0003](adr/0003-inventory-costing.md),
+[ADR-0004](adr/0004-sales-returns.md), and
+[ADR-0006](adr/0006-dispatch-before-invoice.md) for the accounting decisions. See
 [ADR-0005](adr/0005-server-rendered-console.md) for the console architecture.
 
 ## Browser console
@@ -101,7 +112,12 @@ See [ADR-0002](adr/0002-core-money-and-stock.md),
 | `GET /inventory` | Stock levels, valuation, and receive/adjust form |
 | `POST /inventory/receive` | Post a receipt or negative adjustment |
 | `GET /orders`, `POST /orders` | Order register and draft creation |
-| `GET /orders/{id}` | Order detail with reserve, cancel, and invoice actions |
+| `GET /orders/{id}` | Order detail with reserve, dispatch, invoice, and cancel actions |
+| `GET /dispatch` | Delivery-note register and orders ready to pick |
+| `GET /dispatch/{id}` | Delivery-note lines with dispatch and cancel actions |
+| `POST /orders/{id}/delivery-notes` | Create a picking note from a reserved order |
+| `POST /dispatch/{id}/dispatch` | Dispatch stock and post COGS |
+| `POST /dispatch/{id}/cancel` | Cancel a picking note |
 | `GET /invoices` | Receivables list |
 | `GET /invoices/{id}` | Invoice lines, payment form, return form, and histories |
 | `POST /invoices/{id}/payments` | Record a payment |
@@ -128,14 +144,18 @@ lines; the core flows work without JavaScript.
 1. `POST /api/orders` snapshots product prices into a draft order.
 2. `POST /api/orders/{id}/reserve` checks credit and availability, then creates
    active reservations. Product rows are locked to prevent oversell.
-3. `POST /api/orders/{id}/invoice` computes weighted-average issue cost, writes
-   negative stock movements, marks reservations fulfilled, and posts revenue and
-   COGS.
-4. `POST /api/invoices/{id}/returns` validates remaining quantities, credits
+3. `POST /api/orders/{id}/delivery-notes` copies active reservations into a
+   picking note. Stock remains reserved and no ledger entry is posted.
+4. `POST /api/delivery-notes/{id}/dispatch` locks the note, order, and product
+   rows, computes weighted-average issue cost, writes negative stock movements,
+   fulfills reservations, and posts `Dr COGS / Cr inventory`.
+5. `POST /api/orders/{id}/invoice` requires a dispatched order, copies
+   delivery-note costs into invoice lines, and posts `Dr receivable / Cr revenue`.
+6. `POST /api/invoices/{id}/returns` validates remaining quantities, credits
    revenue against accounts receivable, and reverses COGS for restocked goods.
-5. `POST /api/invoices/{id}/payments` applies cash and reduces accounts
+7. `POST /api/invoices/{id}/payments` applies cash and reduces accounts
    receivable.
-6. `GET /api/ledger/trial-balance` and `GET /api/inventory/valuation` expose
+8. `GET /api/ledger/trial-balance` and `GET /api/inventory/valuation` expose
    reconciliation checks.
 
 ## Errors
@@ -153,8 +173,8 @@ the API or console to untrusted clients. See [SECURITY.md](../SECURITY.md).
 
 ## Deferred
 
-Partial purchase receipts, picking and dispatch, multi-warehouse allocation,
-lots/FIFO, tax, period close, cash refunds and exchanges, aging and dunning,
-public API credentials, webhooks, authentication, tenant switching, and desktop
-or mobile clients are outside this slice. The modular package boundaries leave room to add
-them without splitting the service prematurely.
+Partial purchase receipts and deliveries, multi-warehouse allocation, route
+planning, lots/FIFO, tax, period close, cash refunds and exchanges, aging and
+dunning, public API credentials, webhooks, authentication, tenant switching, and
+desktop or mobile clients are outside this slice. The modular package boundaries
+leave room to add them without splitting the service prematurely.

@@ -38,6 +38,36 @@ func apiRouter() http.Handler {
 	return NewRouter(fakePinger{}, core.NewService(store))
 }
 
+func dispatchAPI(t *testing.T, router http.Handler, orderID string) core.DeliveryNote {
+	t.Helper()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/orders/"+orderID+"/delivery-notes", nil)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create delivery note: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var note core.DeliveryNote
+	if err := json.NewDecoder(createRec.Body).Decode(&note); err != nil {
+		t.Fatalf("decode delivery note: %v", err)
+	}
+
+	dispatch := httptest.NewRequest(http.MethodPost, "/api/delivery-notes/"+note.ID+"/dispatch", nil)
+	dispatchRec := httptest.NewRecorder()
+	router.ServeHTTP(dispatchRec, dispatch)
+	if dispatchRec.Code != http.StatusOK {
+		t.Fatalf("dispatch delivery note: expected 200, got %d: %s", dispatchRec.Code, dispatchRec.Body.String())
+	}
+	var dispatched core.DeliveryNote
+	if err := json.NewDecoder(dispatchRec.Body).Decode(&dispatched); err != nil {
+		t.Fatalf("decode dispatched note: %v", err)
+	}
+	if dispatched.Status != "dispatched" || dispatched.DispatchedAt == nil {
+		t.Fatalf("unexpected dispatched note: %+v", dispatched)
+	}
+	return dispatched
+}
+
 func TestOrderToPaymentFlow(t *testing.T) {
 	router := apiRouter()
 
@@ -67,6 +97,7 @@ func TestOrderToPaymentFlow(t *testing.T) {
 		t.Fatalf("reserve: expected 200, got %d: %s", reserveRec.Code, reserveRec.Body.String())
 	}
 
+	dispatchAPI(t, router, order.ID)
 	invoiceRequest := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/invoice", nil)
 	invoiceRec := httptest.NewRecorder()
 	router.ServeHTTP(invoiceRec, invoiceRequest)
@@ -144,6 +175,7 @@ func TestSalesReturnEndpointUpdatesBalance(t *testing.T) {
 		t.Fatalf("reserve: expected 200, got %d: %s", reserveRec.Code, reserveRec.Body.String())
 	}
 
+	dispatchAPI(t, router, order.ID)
 	invoiceRequest := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/invoice", nil)
 	invoiceRec := httptest.NewRecorder()
 	router.ServeHTTP(invoiceRec, invoiceRequest)
@@ -218,6 +250,7 @@ func TestReadEndpointsReturnRecords(t *testing.T) {
 	if reserveRec.Code != http.StatusOK {
 		t.Fatalf("reserve: expected 200, got %d: %s", reserveRec.Code, reserveRec.Body.String())
 	}
+	dispatchAPI(t, router, order.ID)
 	invoiceRequest := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/invoice", nil)
 	invoiceRec := httptest.NewRecorder()
 	router.ServeHTTP(invoiceRec, invoiceRequest)
@@ -317,6 +350,7 @@ func TestInventoryValuationEndpointReconciles(t *testing.T) {
 	if reserveRec.Code != http.StatusOK {
 		t.Fatalf("reserve: expected 200, got %d: %s", reserveRec.Code, reserveRec.Body.String())
 	}
+	dispatchAPI(t, router, order.ID)
 	invoice := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/invoice", nil)
 	invoiceRec := httptest.NewRecorder()
 	router.ServeHTTP(invoiceRec, invoice)

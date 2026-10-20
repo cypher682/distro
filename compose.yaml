@@ -21,10 +21,12 @@ services:
       - ./db/migrations/0003_costing.sql:/docker-entrypoint-initdb.d/0003_costing.sql:ro
       - ./db/migrations/0004_returns.sql:/docker-entrypoint-initdb.d/0004_returns.sql:ro
       - ./db/migrations/0005_procurement.sql:/docker-entrypoint-initdb.d/0005_procurement.sql:ro
-      - ./db/seed.sql:/docker-entrypoint-initdb.d/0006_seed.sql:ro
+      - ./db/migrations/0006_dispatch.sql:/docker-entrypoint-initdb.d/0006_dispatch.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/0007_seed.sql:ro
 
   api:
     build: .
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy

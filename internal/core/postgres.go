@@ -828,7 +828,8 @@ func (s *PostgresStore) ReserveOrder(ctx context.Context, tenantID, orderID stri
 		     + COALESCE((
 		           SELECT SUM(total_cents)
 		           FROM orders
-		           WHERE tenant_id = $1::uuid AND retailer_id = $2::uuid AND status = 'reserved'
+		           WHERE tenant_id = $1::uuid AND retailer_id = $2::uuid
+		             AND status IN ('reserved', 'dispatched')
 		       ), 0)::bigint
 	`, tenantID, retailerID).Scan(&exposure); err != nil {
 		return Order{}, err
@@ -976,6 +977,12 @@ func (s *PostgresStore) CancelOrder(ctx context.Context, tenantID, orderID strin
 			return Order{}, err
 		}
 		if _, err := tx.Exec(ctx, `
+			UPDATE delivery_notes SET status = 'cancelled'
+			WHERE tenant_id = $1::uuid AND order_id = $2::uuid AND status = 'picking'
+		`, tenantID, orderID); err != nil {
+			return Order{}, err
+		}
+		if _, err := tx.Exec(ctx, `
 			UPDATE orders SET status = 'cancelled'
 			WHERE tenant_id = $1::uuid AND id = $2::uuid
 		`, tenantID, orderID); err != nil {
@@ -988,6 +995,367 @@ func (s *PostgresStore) CancelOrder(ctx context.Context, tenantID, orderID strin
 		return Order{}, fmt.Errorf("%w: order %s is %s and cannot be cancelled", ErrConflict, orderID, status)
 	}
 	return s.GetOrder(ctx, tenantID, orderID)
+}
+
+func (s *PostgresStore) CreateDeliveryNote(ctx context.Context, tenantID, orderID string) (DeliveryNote, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var status, retailerID string
+	if err := tx.QueryRow(ctx, `
+		SELECT status, retailer_id::text
+		FROM orders
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		FOR UPDATE
+	`, tenantID, orderID).Scan(&status, &retailerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeliveryNote{}, fmt.Errorf("%w: order %s", ErrNotFound, orderID)
+		}
+		return DeliveryNote{}, err
+	}
+	if status != "reserved" {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s is %s, expected reserved", ErrConflict, orderID, status)
+	}
+
+	var existing string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text FROM delivery_notes
+		WHERE tenant_id = $1::uuid AND order_id = $2::uuid AND status <> 'cancelled'
+		LIMIT 1
+	`, tenantID, orderID).Scan(&existing); err == nil {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s already has a delivery note", ErrConflict, orderID)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return DeliveryNote{}, err
+	}
+
+	var note DeliveryNote
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO delivery_notes (tenant_id, order_id, retailer_id, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'picking')
+		RETURNING id::text, order_id::text, retailer_id::text, status, total_cost_cents, created_at, dispatched_at
+	`, tenantID, orderID, retailerID).Scan(
+		&note.ID,
+		&note.OrderID,
+		&note.RetailerID,
+		&note.Status,
+		&note.TotalCostCents,
+		&note.CreatedAt,
+		&note.DispatchedAt,
+	); err != nil {
+		return DeliveryNote{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO delivery_note_lines
+			(tenant_id, delivery_note_id, reservation_id, order_line_id, product_id,
+			 warehouse_id, quantity, unit_price_cents, line_total_cents)
+		SELECT $1::uuid, $2::uuid, r.id, ol.id, r.product_id, r.warehouse_id,
+		       r.quantity, ol.unit_price_cents, r.quantity * ol.unit_price_cents
+		FROM reservations r
+		JOIN order_lines ol ON ol.order_id = r.order_id AND ol.product_id = r.product_id
+		WHERE r.tenant_id = $1::uuid AND r.order_id = $3::uuid AND r.status = 'active'
+	`, tenantID, note.ID, orderID)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s has no active reservations", ErrConflict, orderID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DeliveryNote{}, err
+	}
+	return loadDeliveryNote(ctx, s.pool, tenantID, note.ID)
+}
+
+func (s *PostgresStore) ListDeliveryNotes(ctx context.Context, tenantID string) ([]DeliveryNote, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, order_id::text, retailer_id::text, status,
+		       total_cost_cents, created_at, dispatched_at
+		FROM delivery_notes
+		WHERE tenant_id = $1::uuid
+		ORDER BY created_at DESC, id DESC
+		LIMIT 100
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	notes := make([]DeliveryNote, 0)
+	index := make(map[string]int)
+	for rows.Next() {
+		var note DeliveryNote
+		if err := rows.Scan(
+			&note.ID,
+			&note.OrderID,
+			&note.RetailerID,
+			&note.Status,
+			&note.TotalCostCents,
+			&note.CreatedAt,
+			&note.DispatchedAt,
+		); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		index[note.ID] = len(notes)
+		notes = append(notes, note)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(notes) == 0 {
+		return notes, nil
+	}
+
+	ids := make([]string, 0, len(notes))
+	for _, note := range notes {
+		ids = append(ids, note.ID)
+	}
+	lineRows, err := s.pool.Query(ctx, `
+		SELECT delivery_note_id::text, id::text, order_line_id::text, product_id::text,
+		       warehouse_id::text, quantity, unit_price_cents, line_total_cents, total_cost_cents
+		FROM delivery_note_lines
+		WHERE tenant_id = $1::uuid AND delivery_note_id::text = ANY($2::text[])
+		ORDER BY product_id, warehouse_id, id
+	`, tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer lineRows.Close()
+	for lineRows.Next() {
+		var noteID string
+		var line DeliveryNoteLine
+		if err := lineRows.Scan(
+			&noteID,
+			&line.ID,
+			&line.OrderLineID,
+			&line.ProductID,
+			&line.WarehouseID,
+			&line.Quantity,
+			&line.UnitPriceCents,
+			&line.LineTotalCents,
+			&line.TotalCostCents,
+		); err != nil {
+			return nil, err
+		}
+		line.DeliveryNoteID = noteID
+		if i, ok := index[noteID]; ok {
+			notes[i].Lines = append(notes[i].Lines, line)
+		}
+	}
+	return notes, lineRows.Err()
+}
+
+func (s *PostgresStore) GetDeliveryNote(ctx context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	return loadDeliveryNote(ctx, s.pool, tenantID, deliveryNoteID)
+}
+
+func (s *PostgresStore) GetDeliveryNoteForOrder(ctx context.Context, tenantID, orderID string) (DeliveryNote, error) {
+	var noteID string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT id::text FROM delivery_notes
+		WHERE tenant_id = $1::uuid AND order_id = $2::uuid AND status <> 'cancelled'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, orderID).Scan(&noteID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeliveryNote{}, fmt.Errorf("%w: delivery note for order %s", ErrNotFound, orderID)
+		}
+		return DeliveryNote{}, err
+	}
+	return loadDeliveryNote(ctx, s.pool, tenantID, noteID)
+}
+
+func (s *PostgresStore) DispatchDeliveryNote(ctx context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var orderID string
+	if err := tx.QueryRow(ctx, `
+		SELECT order_id::text FROM delivery_notes
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, deliveryNoteID).Scan(&orderID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeliveryNote{}, fmt.Errorf("%w: delivery note %s", ErrNotFound, deliveryNoteID)
+		}
+		return DeliveryNote{}, err
+	}
+
+	var orderStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status FROM orders
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		FOR UPDATE
+	`, tenantID, orderID).Scan(&orderStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeliveryNote{}, fmt.Errorf("%w: order %s", ErrNotFound, orderID)
+		}
+		return DeliveryNote{}, err
+	}
+	if orderStatus != "reserved" {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s is %s, expected reserved", ErrConflict, orderID, orderStatus)
+	}
+
+	note, err := loadDeliveryNote(ctx, tx, tenantID, deliveryNoteID, true)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	if note.Status != "picking" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s is %s, expected picking", ErrConflict, deliveryNoteID, note.Status)
+	}
+
+	lineRows, err := tx.Query(ctx, `
+		SELECT id::text, reservation_id::text, product_id::text, warehouse_id::text, quantity
+		FROM delivery_note_lines
+		WHERE tenant_id = $1::uuid AND delivery_note_id = $2::uuid
+		ORDER BY product_id, warehouse_id, id
+		FOR UPDATE
+	`, tenantID, deliveryNoteID)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	type dispatchLine struct {
+		id            string
+		reservationID string
+		productID     string
+		warehouseID   string
+		quantity      int64
+	}
+	lines := make([]dispatchLine, 0)
+	for lineRows.Next() {
+		var line dispatchLine
+		if err := lineRows.Scan(&line.id, &line.reservationID, &line.productID, &line.warehouseID, &line.quantity); err != nil {
+			lineRows.Close()
+			return DeliveryNote{}, err
+		}
+		lines = append(lines, line)
+	}
+	lineRows.Close()
+	if err := lineRows.Err(); err != nil {
+		return DeliveryNote{}, err
+	}
+	if len(lines) == 0 {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s has no lines", ErrConflict, deliveryNoteID)
+	}
+
+	lockedProducts := make(map[string]struct{}, len(lines))
+	var cogs int64
+	for _, line := range lines {
+		if _, locked := lockedProducts[line.productID]; !locked {
+			var id string
+			if err := tx.QueryRow(ctx, `
+				SELECT id::text FROM products
+				WHERE tenant_id = $1::uuid AND id = $2::uuid
+				FOR UPDATE
+			`, tenantID, line.productID).Scan(&id); err != nil {
+				return DeliveryNote{}, err
+			}
+			lockedProducts[line.productID] = struct{}{}
+		}
+
+		var onHand, value int64
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(quantity_delta), 0)::bigint,
+			       COALESCE(SUM(total_cost_cents), 0)::bigint
+			FROM stock_movements
+			WHERE tenant_id = $1::uuid AND product_id = $2::uuid AND warehouse_id = $3::uuid
+		`, tenantID, line.productID, line.warehouseID).Scan(&onHand, &value); err != nil {
+			return DeliveryNote{}, err
+		}
+		cost, err := issueCost(value, line.quantity, onHand)
+		if err != nil {
+			return DeliveryNote{}, err
+		}
+
+		tag, err := tx.Exec(ctx, `
+			UPDATE reservations SET status = 'fulfilled'
+			WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'active'
+		`, tenantID, line.reservationID)
+		if err != nil {
+			return DeliveryNote{}, err
+		}
+		if tag.RowsAffected() != 1 {
+			return DeliveryNote{}, fmt.Errorf("%w: reservation for product %s is no longer active", ErrConflict, line.productID)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO stock_movements
+				(tenant_id, product_id, warehouse_id, quantity_delta, unit_cost_cents, total_cost_cents, reason, reference_type, reference_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 0, $5, 'delivery dispatched', 'delivery_note', $6::uuid)
+		`, tenantID, line.productID, line.warehouseID, -line.quantity, -cost, note.ID); err != nil {
+			return DeliveryNote{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE delivery_note_lines SET total_cost_cents = $3
+			WHERE tenant_id = $1::uuid AND id = $2::uuid
+		`, tenantID, line.id, cost); err != nil {
+			return DeliveryNote{}, err
+		}
+		cogs += cost
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE delivery_notes
+		SET status = 'dispatched', total_cost_cents = $3, dispatched_at = now()
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, deliveryNoteID, cogs); err != nil {
+		return DeliveryNote{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE orders SET status = 'dispatched'
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, note.OrderID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if cogs > 0 {
+		if _, err := tx.Exec(ctx, `
+			WITH g AS (SELECT gen_random_uuid() AS id)
+			INSERT INTO ledger_entries
+				(tenant_id, entry_group, account, debit_cents, credit_cents, reference_type, reference_id)
+			SELECT $1::uuid, g.id, 'cost_of_goods_sold', $2, 0, 'delivery_note', $3::uuid FROM g
+			UNION ALL
+			SELECT $1::uuid, g.id, 'inventory', 0, $2, 'delivery_note', $3::uuid FROM g
+		`, tenantID, cogs, deliveryNoteID); err != nil {
+			return DeliveryNote{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DeliveryNote{}, err
+	}
+	return loadDeliveryNote(ctx, s.pool, tenantID, deliveryNoteID)
+}
+
+func (s *PostgresStore) CancelDeliveryNote(ctx context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	note, err := loadDeliveryNote(ctx, tx, tenantID, deliveryNoteID, true)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	if note.Status != "picking" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s is %s, expected picking", ErrConflict, deliveryNoteID, note.Status)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE delivery_notes SET status = 'cancelled'
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, deliveryNoteID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return DeliveryNote{}, err
+	}
+	return loadDeliveryNote(ctx, s.pool, tenantID, deliveryNoteID)
 }
 
 func (s *PostgresStore) InvoiceOrder(ctx context.Context, tenantID, orderID string) (Invoice, error) {
@@ -1010,8 +1378,25 @@ func (s *PostgresStore) InvoiceOrder(ctx context.Context, tenantID, orderID stri
 		}
 		return Invoice{}, err
 	}
-	if status != "reserved" {
-		return Invoice{}, fmt.Errorf("%w: order %s is %s, expected reserved", ErrConflict, orderID, status)
+	if status != "dispatched" {
+		return Invoice{}, fmt.Errorf("%w: order %s is %s, expected dispatched", ErrConflict, orderID, status)
+	}
+
+	var noteID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text FROM delivery_notes
+		WHERE tenant_id = $1::uuid AND order_id = $2::uuid AND status = 'dispatched'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, orderID).Scan(&noteID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, fmt.Errorf("%w: order %s has no dispatched delivery note", ErrConflict, orderID)
+		}
+		return Invoice{}, err
+	}
+	note, err := loadDeliveryNote(ctx, tx, tenantID, noteID)
+	if err != nil {
+		return Invoice{}, err
 	}
 
 	invoice := Invoice{
@@ -1028,143 +1413,38 @@ func (s *PostgresStore) InvoiceOrder(ctx context.Context, tenantID, orderID stri
 		return Invoice{}, err
 	}
 
-	type fulfillment struct {
-		productID   string
-		warehouseID string
-		quantity    int64
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT product_id::text, warehouse_id::text, quantity
-		FROM reservations
-		WHERE tenant_id = $1::uuid AND order_id = $2::uuid AND status = 'active'
-		ORDER BY product_id, warehouse_id
-		FOR UPDATE
-	`, tenantID, orderID)
-	if err != nil {
-		return Invoice{}, err
-	}
-	fulfillments := make([]fulfillment, 0)
-	for rows.Next() {
-		var item fulfillment
-		if err := rows.Scan(&item.productID, &item.warehouseID, &item.quantity); err != nil {
-			rows.Close()
-			return Invoice{}, err
-		}
-		fulfillments = append(fulfillments, item)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return Invoice{}, err
-	}
-	if len(fulfillments) == 0 {
-		return Invoice{}, fmt.Errorf("%w: order %s has no active reservations", ErrConflict, orderID)
-	}
-
-	type orderLineSnapshot struct {
-		id             string
-		productID      string
-		quantity       int
-		unitPriceCents int64
-	}
-	lineRows, err := tx.Query(ctx, `
-		SELECT id::text, product_id::text, quantity, unit_price_cents
-		FROM order_lines
-		WHERE order_id = $1::uuid
-		ORDER BY product_id
-	`, orderID)
-	if err != nil {
-		return Invoice{}, err
-	}
-	orderLines := make(map[string]orderLineSnapshot, len(fulfillments))
-	for lineRows.Next() {
-		var line orderLineSnapshot
-		if err := lineRows.Scan(&line.id, &line.productID, &line.quantity, &line.unitPriceCents); err != nil {
-			lineRows.Close()
-			return Invoice{}, err
-		}
-		orderLines[line.productID] = line
-	}
-	lineRows.Close()
-	if err := lineRows.Err(); err != nil {
-		return Invoice{}, err
-	}
-
-	lockedProducts := make(map[string]struct{}, len(fulfillments))
-	var cogs int64
-	for _, item := range fulfillments {
-		if _, locked := lockedProducts[item.productID]; !locked {
-			var id string
-			if err := tx.QueryRow(ctx, `
-				SELECT id::text FROM products
-				WHERE tenant_id = $1::uuid AND id = $2::uuid
-				FOR UPDATE
-			`, tenantID, item.productID).Scan(&id); err != nil {
-				return Invoice{}, err
-			}
-			lockedProducts[item.productID] = struct{}{}
-		}
-
-		var onHand, value int64
-		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(SUM(quantity_delta), 0)::bigint,
-			       COALESCE(SUM(total_cost_cents), 0)::bigint
-			FROM stock_movements
-			WHERE tenant_id = $1::uuid AND product_id = $2::uuid AND warehouse_id = $3::uuid
-		`, tenantID, item.productID, item.warehouseID).Scan(&onHand, &value); err != nil {
-			return Invoice{}, err
-		}
-		cost, err := issueCost(value, item.quantity, onHand)
-		if err != nil {
-			return Invoice{}, err
-		}
-		cogs += cost
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO stock_movements
-				(tenant_id, product_id, warehouse_id, quantity_delta, unit_cost_cents, total_cost_cents, reason, reference_type, reference_id)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 0, $5, 'invoice fulfilled', 'invoice', $6::uuid)
-		`, tenantID, item.productID, item.warehouseID, -item.quantity, -cost, invoice.ID); err != nil {
-			return Invoice{}, err
-		}
-
-		orderLine, ok := orderLines[item.productID]
-		if !ok {
-			return Invoice{}, fmt.Errorf("%w: missing order line for product %s", ErrConflict, item.productID)
-		}
-		if int64(orderLine.quantity) != item.quantity {
-			return Invoice{}, fmt.Errorf("%w: reservation quantity does not match order line for product %s", ErrConflict, item.productID)
-		}
+	var invoiceTotal int64
+	for _, noteLine := range note.Lines {
 		invoiceLine := InvoiceLine{
 			InvoiceID:      invoice.ID,
-			ProductID:      item.productID,
-			WarehouseID:    item.warehouseID,
-			Quantity:       orderLine.quantity,
-			UnitPriceCents: orderLine.unitPriceCents,
-			LineTotalCents: int64(orderLine.quantity) * orderLine.unitPriceCents,
-			TotalCostCents: cost,
+			ProductID:      noteLine.ProductID,
+			WarehouseID:    noteLine.WarehouseID,
+			Quantity:       noteLine.Quantity,
+			UnitPriceCents: noteLine.UnitPriceCents,
+			LineTotalCents: noteLine.LineTotalCents,
+			TotalCostCents: noteLine.TotalCostCents,
 		}
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO invoice_lines
 				(tenant_id, invoice_id, order_line_id, product_id, warehouse_id, quantity, unit_price_cents, line_total_cents, total_cost_cents)
 			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9)
 			RETURNING id::text
-		`, tenantID, invoice.ID, orderLine.id, item.productID, item.warehouseID, orderLine.quantity, orderLine.unitPriceCents, invoiceLine.LineTotalCents, cost).Scan(&invoiceLine.ID); err != nil {
+		`, tenantID, invoice.ID, noteLine.OrderLineID, noteLine.ProductID, noteLine.WarehouseID, noteLine.Quantity, noteLine.UnitPriceCents, noteLine.LineTotalCents, noteLine.TotalCostCents).Scan(&invoiceLine.ID); err != nil {
 			return Invoice{}, err
 		}
+		invoiceTotal += invoiceLine.LineTotalCents
 		invoice.Lines = append(invoice.Lines, invoiceLine)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE reservations SET status = 'fulfilled'
-		WHERE tenant_id = $1::uuid AND order_id = $2::uuid AND status = 'active'
-	`, tenantID, orderID); err != nil {
-		return Invoice{}, err
+	if invoiceTotal != totalCents {
+		return Invoice{}, fmt.Errorf("%w: delivery note total does not match order %s", ErrConflict, orderID)
 	}
+
 	if _, err := tx.Exec(ctx, `
 		UPDATE orders SET status = 'invoiced'
 		WHERE tenant_id = $1::uuid AND id = $2::uuid
 	`, tenantID, orderID); err != nil {
 		return Invoice{}, err
 	}
-
 	if _, err := tx.Exec(ctx, `
 		WITH g AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ledger_entries
@@ -1174,19 +1454,6 @@ func (s *PostgresStore) InvoiceOrder(ctx context.Context, tenantID, orderID stri
 		SELECT $1::uuid, g.id, 'revenue', 0, $2, 'invoice', $3::uuid FROM g
 	`, tenantID, totalCents, invoice.ID); err != nil {
 		return Invoice{}, err
-	}
-
-	if cogs > 0 {
-		if _, err := tx.Exec(ctx, `
-			WITH g AS (SELECT gen_random_uuid() AS id)
-			INSERT INTO ledger_entries
-				(tenant_id, entry_group, account, debit_cents, credit_cents, reference_type, reference_id)
-			SELECT $1::uuid, g.id, 'cost_of_goods_sold', $2, 0, 'invoice', $3::uuid FROM g
-			UNION ALL
-			SELECT $1::uuid, g.id, 'inventory', 0, $2, 'invoice', $3::uuid FROM g
-		`, tenantID, cogs, invoice.ID); err != nil {
-			return Invoice{}, err
-		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1430,7 +1697,8 @@ func (s *PostgresStore) GetCredit(ctx context.Context, tenantID, retailerID stri
 		       COALESCE((
 		           SELECT SUM(total_cents)
 		           FROM orders
-		           WHERE tenant_id = $1::uuid AND retailer_id = $2::uuid AND status = 'reserved'
+		           WHERE tenant_id = $1::uuid AND retailer_id = $2::uuid
+		             AND status IN ('reserved', 'dispatched')
 		       ), 0)::bigint
 	`, tenantID, retailerID).Scan(&view.OpenInvoiceCents, &view.ReservedOrderCents); err != nil {
 		return CreditView{}, err
@@ -1800,6 +2068,66 @@ func loadPurchaseOrder(ctx context.Context, q querier, tenantID, purchaseOrderID
 		return PurchaseOrder{}, err
 	}
 	return purchaseOrder, nil
+}
+
+func loadDeliveryNote(ctx context.Context, q querier, tenantID, deliveryNoteID string, forUpdate ...bool) (DeliveryNote, error) {
+	query := `
+		SELECT id::text, order_id::text, retailer_id::text, status,
+		       total_cost_cents, created_at, dispatched_at
+		FROM delivery_notes
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`
+	if len(forUpdate) > 0 && forUpdate[0] {
+		query += " FOR UPDATE"
+	}
+	var note DeliveryNote
+	if err := q.QueryRow(ctx, query, tenantID, deliveryNoteID).Scan(
+		&note.ID,
+		&note.OrderID,
+		&note.RetailerID,
+		&note.Status,
+		&note.TotalCostCents,
+		&note.CreatedAt,
+		&note.DispatchedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeliveryNote{}, fmt.Errorf("%w: delivery note %s", ErrNotFound, deliveryNoteID)
+		}
+		return DeliveryNote{}, err
+	}
+
+	rows, err := q.Query(ctx, `
+		SELECT id::text, order_line_id::text, product_id::text, warehouse_id::text,
+		       quantity, unit_price_cents, line_total_cents, total_cost_cents
+		FROM delivery_note_lines
+		WHERE tenant_id = $1::uuid AND delivery_note_id = $2::uuid
+		ORDER BY product_id, warehouse_id, id
+	`, tenantID, deliveryNoteID)
+	if err != nil {
+		return DeliveryNote{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var line DeliveryNoteLine
+		if err := rows.Scan(
+			&line.ID,
+			&line.OrderLineID,
+			&line.ProductID,
+			&line.WarehouseID,
+			&line.Quantity,
+			&line.UnitPriceCents,
+			&line.LineTotalCents,
+			&line.TotalCostCents,
+		); err != nil {
+			return DeliveryNote{}, err
+		}
+		line.DeliveryNoteID = note.ID
+		note.Lines = append(note.Lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		return DeliveryNote{}, err
+	}
+	return note, nil
 }
 
 func loadOrder(ctx context.Context, q querier, tenantID, orderID string) (Order, error) {

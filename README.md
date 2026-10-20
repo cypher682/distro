@@ -8,15 +8,16 @@ MVP scaffold for the distributor and wholesale commerce platform.
   retailers, warehouses, and suppliers
 - supplier purchase orders and full receiving into stock
 - append-only stock movements and reservations
-- order lifecycle and credit exposure
+- order lifecycle from reservation through picking, dispatch, and invoice
+- delivery notes with dispatch cost snapshots and credit exposure
 - weighted-average inventory costing and cost of goods sold
 - sales returns with restock or damage handling
 - invoice and double-entry ledger posting
-- server-rendered browser console for purchasing, stock, orders, invoices,
-  returns, and ledger
-- JSON API for purchasing, ordering, and operations stock flows
+- server-rendered browser console for purchasing, stock, orders, dispatch,
+  invoices, returns, and ledger
+- JSON API for purchasing, ordering, dispatch, and operations stock flows
 
-Deferred: partial purchase receipts, picking and dispatch, routing, driver app,
+Deferred: partial purchase receipts and deliveries, route planning, driver app,
 WhatsApp intake, offline rep sync, aging and dunning, analytics, public API,
 webhooks, and native desktop or mobile clients.
 
@@ -48,9 +49,9 @@ change.
 
 Open http://localhost:8081/ to set up products, retailers, warehouses, and
 suppliers, then create purchase orders, receive stock, create and reserve sales
-orders, issue invoices, record payments, and post returns in the console.
-Catalog records can also be created from the Catalog page without SQL. The same
-flow is available over the API:
+orders, pick and dispatch them, issue invoices, record payments, and post returns
+in the console. Catalog records can also be created from the Catalog page without
+SQL. The same flow is available over the API:
 
 ```bash
 # Catalog and stock
@@ -64,7 +65,7 @@ PO=$(curl -s -X POST http://localhost:8081/api/purchase-orders \
 PO_ID=$(echo "$PO" | jq -r .id)
 curl -s -X POST http://localhost:8081/api/purchase-orders/$PO_ID/receive | jq
 
-# Create, reserve, and invoice an order
+# Create, reserve, dispatch, and invoice an order
 ORDER=$(curl -s -X POST http://localhost:8081/api/orders \
   -H 'Content-Type: application/json' \
   -d '{"retailer_id":"00000000-0000-0000-0000-000000000020","lines":[{"product_id":"00000000-0000-0000-0000-000000000101","quantity":2}]}')
@@ -72,6 +73,10 @@ ORDER_ID=$(echo "$ORDER" | jq -r .id)
 
 curl -s -X POST http://localhost:8081/api/orders/$ORDER_ID/reserve | jq
 curl -s http://localhost:8081/api/retailers/00000000-0000-0000-0000-000000000020/credit | jq
+
+NOTE=$(curl -s -X POST http://localhost:8081/api/orders/$ORDER_ID/delivery-notes)
+NOTE_ID=$(echo "$NOTE" | jq -r .id)
+curl -s -X POST http://localhost:8081/api/delivery-notes/$NOTE_ID/dispatch | jq
 
 INVOICE=$(curl -s -X POST http://localhost:8081/api/orders/$ORDER_ID/invoice)
 INVOICE_ID=$(echo "$INVOICE" | jq -r .id)
@@ -93,8 +98,9 @@ curl -s http://localhost:8081/api/inventory/valuation | jq
 ```
 
 The trial balance response includes a `balanced` flag. It must stay `true` after
-every stock receipt, adjustment, invoice, return, and payment. The valuation
-response reconciles on-hand stock value, the inventory account, and posted COGS.
+every stock receipt, adjustment, dispatch, invoice, return, and payment. The
+valuation response reconciles on-hand stock value, the inventory account, and
+posted COGS.
 
 ## API
 
@@ -124,8 +130,13 @@ response reconciles on-hand stock value, the inventory account, and posted COGS.
 | GET | `/api/orders` | List the latest 100 orders with lines |
 | GET | `/api/orders/{id}` | Read an order |
 | POST | `/api/orders/{id}/reserve` | Reserve stock and check credit |
-| POST | `/api/orders/{id}/cancel` | Cancel a draft or reserved order |
-| POST | `/api/orders/{id}/invoice` | Invoice a reserved order and post the ledger |
+| POST | `/api/orders/{id}/cancel` | Cancel a draft or reserved order and release reservations |
+| POST | `/api/orders/{id}/delivery-notes` | Create a picking delivery note from a reserved order |
+| GET | `/api/delivery-notes` | List the latest 100 delivery notes |
+| GET | `/api/delivery-notes/{id}` | Read a delivery note with lines |
+| POST | `/api/delivery-notes/{id}/dispatch` | Dispatch stock and post COGS |
+| POST | `/api/delivery-notes/{id}/cancel` | Cancel a picking delivery note |
+| POST | `/api/orders/{id}/invoice` | Invoice a dispatched order and post the receivable |
 | GET | `/api/retailers/{id}/credit` | Credit limit, exposure, and availability |
 | GET | `/api/invoices` | List the latest 100 invoices with returned totals |
 | GET | `/api/invoices/{id}` | Read an invoice with lines, returns, and payments |
@@ -144,6 +155,11 @@ Purchase order bodies use `supplier_id`, `warehouse_id`, and `lines` with
 Stock receipts use a positive `quantity` and `unit_cost_cents`. Negative
 quantities are adjustments: they are valued at the current weighted average,
 posted to inventory shrinkage, and cannot consume reserved stock.
+
+Delivery notes are created from a reserved order without a body. Creation copies
+the active reservations into immutable picking lines. Dispatching issues the
+reserved stock and posts COGS; invoicing then posts only the receivable and
+revenue. Only one non-cancelled delivery note may exist per order.
 
 Returns default to `"restock": true`: goods come back at the original invoice
 cost, inventory is restored, and COGS is reversed. Set `"restock": false` for
@@ -212,8 +228,8 @@ docs/adr/               decisions
   deferred. Purchasing can receive into any warehouse.
 - Purchase orders are received in full; partial receipts and backorders are
   deferred.
-- Invoicing is the dispatch proxy and writes stock and COGS movements. Picking
-  and dispatch will replace this.
+- Deliveries are all-or-nothing per order. Partial picking, split deliveries,
+  and backorders are deferred.
 - Costing is moving weighted average only. Landed costs, FIFO/lots, and period
   close are deferred.
 - Returns create a receivable credit but do not issue cash refunds or exchange

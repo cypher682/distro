@@ -730,6 +730,24 @@ select:hover {
   padding: 5px 18px 14px;
 }
 
+.queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #e1e6de;
+}
+
+.queue-row:last-child {
+  border-bottom: 0;
+}
+
+.queue-row small {
+  display: block;
+  margin-top: 2px;
+}
+
 .credit-row {
   padding: 11px 0;
   border-bottom: 1px solid #e1e6de;

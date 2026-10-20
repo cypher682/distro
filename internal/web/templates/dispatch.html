@@ -1,0 +1,77 @@
+{{define "content"}}
+<div class="grid grid-main-side">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Delivery notes</h2>
+        <p>Picking, dispatch, and delivered cost snapshots.</p>
+      </div>
+      <span class="count">{{len .DeliveryNotes}} shown</span>
+    </div>
+    {{if .DeliveryNotes}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Delivery</th>
+            <th scope="col">Retailer</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Lines</th>
+            <th scope="col" class="num">Cost</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .DeliveryNotes}}
+          <tr>
+            <td><a class="doc-link" href="/dispatch/{{.ID}}">{{shortID .ID}}</a><small>{{date .CreatedAt}}</small></td>
+            <td>{{$.RetailerName .RetailerID}}</td>
+            <td>{{template "status" .Status}}</td>
+            <td class="num">{{len .Lines}}</td>
+            <td class="num">{{money .TotalCostCents}}</td>
+            <td class="actions">
+              {{if eq .Status "picking"}}
+              <form method="post" action="/dispatch/{{.ID}}/dispatch" onsubmit="return confirm('Dispatch this delivery? Stock and COGS will be posted.')">
+                <button class="button button-small" type="submit">Dispatch</button>
+              </form>
+              {{end}}
+              <a class="button button-small button-quiet" href="/dispatch/{{.ID}}">Open</a>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No delivery notes yet. Pick a reserved order to start.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel panel-sticky">
+    <div class="panel-head">
+      <div>
+        <h2>Ready to pick</h2>
+        <p>Reserved orders waiting for a delivery note.</p>
+      </div>
+    </div>
+    {{$ready := false}}
+    {{range .Orders}}
+    {{if and (eq .Status "reserved") (not ($.OrderHasDeliveryNote .ID))}}
+    {{$ready = true}}
+    <div class="queue-row">
+      <div>
+        <a class="doc-link" href="/orders/{{.ID}}">{{shortID .ID}}</a>
+        <small>{{$.RetailerName .RetailerID}} · {{money .TotalCents}}</small>
+      </div>
+      <form method="post" action="/orders/{{.ID}}/delivery-notes">
+        <button class="button button-small" type="submit">Pick</button>
+      </form>
+    </div>
+    {{end}}
+    {{end}}
+    {{if not $ready}}
+    <div class="empty">No reserved orders waiting. Reserve an order first.</div>
+    {{end}}
+  </aside>
+</div>
+{{end}}

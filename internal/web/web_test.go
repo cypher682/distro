@@ -52,6 +52,7 @@ func TestPagesRender(t *testing.T) {
 		{"/inventory", "Stock ledger"},
 		{"/purchasing", "Purchase orders"},
 		{"/orders", "Order register"},
+		{"/dispatch", "Delivery notes"},
 		{"/invoices", "Receivables"},
 		{"/ledger", "Trial balance"},
 	} {
@@ -84,6 +85,36 @@ func TestOrderInvoiceReturnFlow(t *testing.T) {
 	server.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/orders/"+orderID+"/reserve", nil))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("reserve: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/orders/"+orderID+"/delivery-notes", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create delivery note: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	noteID := pathID(t, rec.Header().Get("Location"), "/dispatch/")
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dispatch/"+noteID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delivery note page: expected 200, got %d", rec.Code)
+	}
+	for _, want := range []string{"Picking", "Demo retailer", "Rice 25kg"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("delivery note page: missing %q", want)
+		}
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/dispatch/"+noteID+"/dispatch", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("dispatch: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dispatch/"+noteID, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Dispatched") {
+		t.Fatalf("dispatched page: expected Dispatched, got %d", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()

@@ -19,6 +19,7 @@ type MemoryStore struct {
 	inventoryCost  map[string]int64
 	reservations   map[string]*memoryReservation
 	orders         map[string]map[string]*Order
+	deliveryNotes  map[string]map[string]*DeliveryNote
 	invoices       map[string]map[string]*Invoice
 	invoiceLines   map[string][]InvoiceLine
 	payments       map[string]map[string]*Payment
@@ -57,6 +58,7 @@ func NewMemoryStore() *MemoryStore {
 		inventoryCost:  make(map[string]int64),
 		reservations:   make(map[string]*memoryReservation),
 		orders:         make(map[string]map[string]*Order),
+		deliveryNotes:  make(map[string]map[string]*DeliveryNote),
 		invoices:       make(map[string]map[string]*Invoice),
 		invoiceLines:   make(map[string][]InvoiceLine),
 		payments:       make(map[string]map[string]*Payment),
@@ -596,11 +598,205 @@ func (m *MemoryStore) CancelOrder(_ context.Context, tenantID, orderID string) (
 				reservation.Status = "released"
 			}
 		}
+		for _, note := range m.deliveryNotes[tenantID] {
+			if note.OrderID == order.ID && note.Status == "picking" {
+				note.Status = "cancelled"
+			}
+		}
 		order.Status = "cancelled"
 	default:
 		return Order{}, fmt.Errorf("%w: order %s is %s and cannot be cancelled", ErrConflict, orderID, order.Status)
 	}
 	return cloneOrder(*order), nil
+}
+
+func (m *MemoryStore) CreateDeliveryNote(_ context.Context, tenantID, orderID string) (DeliveryNote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	order, ok := m.orders[tenantID][orderID]
+	if !ok {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s", ErrNotFound, orderID)
+	}
+	if order.Status != "reserved" {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s is %s, expected reserved", ErrConflict, orderID, order.Status)
+	}
+	for _, note := range m.deliveryNotes[tenantID] {
+		if note.OrderID == orderID && note.Status != "cancelled" {
+			return DeliveryNote{}, fmt.Errorf("%w: order %s already has a delivery note", ErrConflict, orderID)
+		}
+	}
+
+	reservations := make([]*memoryReservation, 0)
+	for _, reservation := range m.reservations {
+		if reservation.TenantID == tenantID && reservation.OrderID == orderID && reservation.Status == "active" {
+			reservations = append(reservations, reservation)
+		}
+	}
+	if len(reservations) == 0 {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s has no active reservations", ErrConflict, orderID)
+	}
+	sort.Slice(reservations, func(i, j int) bool {
+		if reservations[i].ProductID == reservations[j].ProductID {
+			return reservations[i].WarehouseID < reservations[j].WarehouseID
+		}
+		return reservations[i].ProductID < reservations[j].ProductID
+	})
+
+	orderLines := make(map[string]OrderLine, len(order.Lines))
+	for _, line := range order.Lines {
+		orderLines[line.ProductID] = line
+	}
+
+	note := &DeliveryNote{
+		ID:         m.newID(),
+		OrderID:    order.ID,
+		RetailerID: order.RetailerID,
+		Status:     "picking",
+		CreatedAt:  time.Now().UTC(),
+	}
+	for _, reservation := range reservations {
+		line, ok := orderLines[reservation.ProductID]
+		if !ok || int64(line.Quantity) != reservation.Quantity {
+			return DeliveryNote{}, fmt.Errorf("%w: reservation does not match order line for product %s", ErrConflict, reservation.ProductID)
+		}
+		note.Lines = append(note.Lines, DeliveryNoteLine{
+			ID:             m.newID(),
+			DeliveryNoteID: note.ID,
+			OrderLineID:    line.ID,
+			ProductID:      reservation.ProductID,
+			WarehouseID:    reservation.WarehouseID,
+			Quantity:       int(reservation.Quantity),
+			UnitPriceCents: line.UnitPriceCents,
+			LineTotalCents: int64(reservation.Quantity) * line.UnitPriceCents,
+		})
+	}
+	m.tenantDeliveryNotes(tenantID)[note.ID] = note
+	return cloneDeliveryNote(*note), nil
+}
+
+func (m *MemoryStore) ListDeliveryNotes(_ context.Context, tenantID string) ([]DeliveryNote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]DeliveryNote, 0, len(m.deliveryNotes[tenantID]))
+	for _, note := range m.deliveryNotes[tenantID] {
+		out = append(out, cloneDeliveryNote(*note))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (m *MemoryStore) GetDeliveryNote(_ context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	note, ok := m.deliveryNotes[tenantID][deliveryNoteID]
+	if !ok {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s", ErrNotFound, deliveryNoteID)
+	}
+	return cloneDeliveryNote(*note), nil
+}
+
+func (m *MemoryStore) GetDeliveryNoteForOrder(_ context.Context, tenantID, orderID string) (DeliveryNote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var found *DeliveryNote
+	for _, note := range m.deliveryNotes[tenantID] {
+		if note.OrderID != orderID || note.Status == "cancelled" {
+			continue
+		}
+		if found == nil || note.CreatedAt.After(found.CreatedAt) || (note.CreatedAt.Equal(found.CreatedAt) && note.ID > found.ID) {
+			found = note
+		}
+	}
+	if found == nil {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note for order %s", ErrNotFound, orderID)
+	}
+	return cloneDeliveryNote(*found), nil
+}
+
+func (m *MemoryStore) DispatchDeliveryNote(_ context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	note, ok := m.deliveryNotes[tenantID][deliveryNoteID]
+	if !ok {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s", ErrNotFound, deliveryNoteID)
+	}
+	if note.Status != "picking" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s is %s, expected picking", ErrConflict, deliveryNoteID, note.Status)
+	}
+	order, ok := m.orders[tenantID][note.OrderID]
+	if !ok {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s", ErrNotFound, note.OrderID)
+	}
+	if order.Status != "reserved" {
+		return DeliveryNote{}, fmt.Errorf("%w: order %s is %s, expected reserved", ErrConflict, note.OrderID, order.Status)
+	}
+
+	var cogs int64
+	for i := range note.Lines {
+		line := &note.Lines[i]
+		key := stockKey(tenantID, line.ProductID, line.WarehouseID)
+		cost, err := issueCost(m.inventoryCost[key], int64(line.Quantity), m.onHand[key])
+		if err != nil {
+			return DeliveryNote{}, err
+		}
+		var reservation *memoryReservation
+		for _, candidate := range m.reservations {
+			if candidate.TenantID == tenantID &&
+				candidate.OrderID == order.ID &&
+				candidate.ProductID == line.ProductID &&
+				candidate.WarehouseID == line.WarehouseID &&
+				candidate.Status == "active" {
+				reservation = candidate
+				break
+			}
+		}
+		if reservation == nil || reservation.Quantity != int64(line.Quantity) {
+			return DeliveryNote{}, fmt.Errorf("%w: missing reservation for product %s", ErrConflict, line.ProductID)
+		}
+		reservation.Status = "fulfilled"
+		m.onHand[key] -= int64(line.Quantity)
+		m.inventoryCost[key] -= cost
+		line.TotalCostCents = cost
+		note.TotalCostCents += cost
+		cogs += cost
+	}
+
+	now := time.Now().UTC()
+	note.Status = "dispatched"
+	note.DispatchedAt = &now
+	order.Status = "dispatched"
+	if cogs > 0 {
+		m.ledger = append(m.ledger,
+			memoryLedgerEntry{TenantID: tenantID, Account: "cost_of_goods_sold", DebitCents: cogs, ReferenceType: "delivery_note", ReferenceID: note.ID},
+			memoryLedgerEntry{TenantID: tenantID, Account: "inventory", CreditCents: cogs, ReferenceType: "delivery_note", ReferenceID: note.ID},
+		)
+	}
+	return cloneDeliveryNote(*note), nil
+}
+
+func (m *MemoryStore) CancelDeliveryNote(_ context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	note, ok := m.deliveryNotes[tenantID][deliveryNoteID]
+	if !ok {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s", ErrNotFound, deliveryNoteID)
+	}
+	if note.Status != "picking" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery note %s is %s, expected picking", ErrConflict, deliveryNoteID, note.Status)
+	}
+	note.Status = "cancelled"
+	return cloneDeliveryNote(*note), nil
 }
 
 func (m *MemoryStore) InvoiceOrder(_ context.Context, tenantID, orderID string) (Invoice, error) {
@@ -611,32 +807,19 @@ func (m *MemoryStore) InvoiceOrder(_ context.Context, tenantID, orderID string) 
 	if !ok {
 		return Invoice{}, fmt.Errorf("%w: order %s", ErrNotFound, orderID)
 	}
-	if order.Status != "reserved" {
-		return Invoice{}, fmt.Errorf("%w: order %s is %s, expected reserved", ErrConflict, orderID, order.Status)
+	if order.Status != "dispatched" {
+		return Invoice{}, fmt.Errorf("%w: order %s is %s, expected dispatched", ErrConflict, orderID, order.Status)
 	}
 
-	type issue struct {
-		reservation *memoryReservation
-		costCents   int64
-	}
-	balances := make(map[string][2]int64)
-	issues := make([]issue, 0)
-	var cogs int64
-	for _, reservation := range m.reservations {
-		if reservation.TenantID == tenantID && reservation.OrderID == order.ID && reservation.Status == "active" {
-			key := stockKey(tenantID, reservation.ProductID, reservation.WarehouseID)
-			balance, ok := balances[key]
-			if !ok {
-				balance = [2]int64{m.onHand[key], m.inventoryCost[key]}
-			}
-			cost, err := issueCost(balance[1], reservation.Quantity, balance[0])
-			if err != nil {
-				return Invoice{}, err
-			}
-			balances[key] = [2]int64{balance[0] - reservation.Quantity, balance[1] - cost}
-			cogs += cost
-			issues = append(issues, issue{reservation: reservation, costCents: cost})
+	var note *DeliveryNote
+	for _, candidate := range m.deliveryNotes[tenantID] {
+		if candidate.OrderID == orderID && candidate.Status == "dispatched" {
+			note = candidate
+			break
 		}
+	}
+	if note == nil {
+		return Invoice{}, fmt.Errorf("%w: order %s has no dispatched delivery note", ErrConflict, orderID)
 	}
 
 	invoice := Invoice{
@@ -647,49 +830,34 @@ func (m *MemoryStore) InvoiceOrder(_ context.Context, tenantID, orderID string) 
 		TotalCents: order.TotalCents,
 		CreatedAt:  time.Now().UTC(),
 	}
-	issueByProduct := make(map[string]issue, len(issues))
-	for _, item := range issues {
-		issueByProduct[item.reservation.ProductID] = item
-	}
-	lines := make([]InvoiceLine, 0, len(order.Lines))
-	for _, line := range order.Lines {
-		item, ok := issueByProduct[line.ProductID]
-		if !ok {
-			return Invoice{}, fmt.Errorf("%w: missing reservation for product %s", ErrConflict, line.ProductID)
-		}
-		lines = append(lines, InvoiceLine{
+	lines := make([]InvoiceLine, 0, len(note.Lines))
+	var invoiceTotal int64
+	for _, noteLine := range note.Lines {
+		line := InvoiceLine{
 			ID:             newID(),
 			InvoiceID:      invoice.ID,
-			ProductID:      line.ProductID,
-			WarehouseID:    item.reservation.WarehouseID,
-			Quantity:       line.Quantity,
-			UnitPriceCents: line.UnitPriceCents,
-			LineTotalCents: line.LineTotalCents,
-			TotalCostCents: item.costCents,
-		})
+			ProductID:      noteLine.ProductID,
+			WarehouseID:    noteLine.WarehouseID,
+			Quantity:       noteLine.Quantity,
+			UnitPriceCents: noteLine.UnitPriceCents,
+			LineTotalCents: noteLine.LineTotalCents,
+			TotalCostCents: noteLine.TotalCostCents,
+		}
+		invoiceTotal += line.LineTotalCents
+		lines = append(lines, line)
+	}
+	if invoiceTotal != order.TotalCents {
+		return Invoice{}, fmt.Errorf("%w: delivery note total does not match order %s", ErrConflict, orderID)
 	}
 	invoice.Lines = lines
 	m.invoiceLines[invoice.ID] = lines
 	m.tenantInvoices(tenantID)[invoice.ID] = &invoice
-
-	for _, item := range issues {
-		key := stockKey(tenantID, item.reservation.ProductID, item.reservation.WarehouseID)
-		m.onHand[key] = balances[key][0]
-		m.inventoryCost[key] = balances[key][1]
-		item.reservation.Status = "fulfilled"
-	}
 	order.Status = "invoiced"
 
 	m.ledger = append(m.ledger,
 		memoryLedgerEntry{TenantID: tenantID, Account: "accounts_receivable", DebitCents: invoice.TotalCents, ReferenceType: "invoice", ReferenceID: invoice.ID},
 		memoryLedgerEntry{TenantID: tenantID, Account: "revenue", CreditCents: invoice.TotalCents, ReferenceType: "invoice", ReferenceID: invoice.ID},
 	)
-	if cogs > 0 {
-		m.ledger = append(m.ledger,
-			memoryLedgerEntry{TenantID: tenantID, Account: "cost_of_goods_sold", DebitCents: cogs, ReferenceType: "invoice", ReferenceID: invoice.ID},
-			memoryLedgerEntry{TenantID: tenantID, Account: "inventory", CreditCents: cogs, ReferenceType: "invoice", ReferenceID: invoice.ID},
-		)
-	}
 	return invoice, nil
 }
 
@@ -763,7 +931,7 @@ func (m *MemoryStore) GetCredit(_ context.Context, tenantID, retailerID string) 
 		}
 	}
 	for _, order := range m.orders[tenantID] {
-		if order.RetailerID == retailerID && order.Status == "reserved" {
+		if order.RetailerID == retailerID && (order.Status == "reserved" || order.Status == "dispatched") {
 			view.ReservedOrderCents += order.TotalCents
 		}
 	}
@@ -1007,7 +1175,7 @@ func (m *MemoryStore) exposureLocked(tenantID, retailerID string) int64 {
 		}
 	}
 	for _, order := range m.orders[tenantID] {
-		if order.RetailerID == retailerID && order.Status == "reserved" {
+		if order.RetailerID == retailerID && (order.Status == "reserved" || order.Status == "dispatched") {
 			exposure += order.TotalCents
 		}
 	}
@@ -1081,6 +1249,13 @@ func (m *MemoryStore) tenantOrders(tenantID string) map[string]*Order {
 	return m.orders[tenantID]
 }
 
+func (m *MemoryStore) tenantDeliveryNotes(tenantID string) map[string]*DeliveryNote {
+	if m.deliveryNotes[tenantID] == nil {
+		m.deliveryNotes[tenantID] = make(map[string]*DeliveryNote)
+	}
+	return m.deliveryNotes[tenantID]
+}
+
 func (m *MemoryStore) tenantInvoices(tenantID string) map[string]*Invoice {
 	if m.invoices[tenantID] == nil {
 		m.invoices[tenantID] = make(map[string]*Invoice)
@@ -1109,6 +1284,15 @@ func stockKey(tenantID, productID, warehouseID string) string {
 func cloneOrder(order Order) Order {
 	order.Lines = append([]OrderLine(nil), order.Lines...)
 	return order
+}
+
+func cloneDeliveryNote(note DeliveryNote) DeliveryNote {
+	note.Lines = append([]DeliveryNoteLine(nil), note.Lines...)
+	if note.DispatchedAt != nil {
+		dispatchedAt := *note.DispatchedAt
+		note.DispatchedAt = &dispatchedAt
+	}
+	return note
 }
 
 func cloneInvoice(invoice Invoice) Invoice {

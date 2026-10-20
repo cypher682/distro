@@ -11,7 +11,15 @@
       <button class="button" type="submit">Reserve stock</button>
     </form>
     {{else if eq .Order.Status "reserved"}}
-    <form method="post" action="/orders/{{.Order.ID}}/invoice" onsubmit="return confirm('Invoice this order? Stock, COGS, and revenue will be posted.')">
+    {{if .Note}}
+    <a class="button" href="/dispatch/{{.Note.ID}}">Open delivery note</a>
+    {{else}}
+    <form method="post" action="/orders/{{.Order.ID}}/delivery-notes">
+      <button class="button" type="submit">Create delivery note</button>
+    </form>
+    {{end}}
+    {{else if eq .Order.Status "dispatched"}}
+    <form method="post" action="/orders/{{.Order.ID}}/invoice" onsubmit="return confirm('Invoice this order? Receivable and revenue will be posted.')">
       <button class="button" type="submit">Invoice order</button>
     </form>
     {{end}}
@@ -28,6 +36,9 @@
   <div><span>Order total</span><strong class="num">{{money .Order.TotalCents}}</strong></div>
   <div><span>Retailer</span><strong>{{.RetailerName .Order.RetailerID}}</strong></div>
   <div><span>Lines</span><strong>{{len .Order.Lines}}</strong></div>
+  {{if .Note}}
+  <div><span>Delivery note</span><strong><a class="doc-link" href="/dispatch/{{.Note.ID}}">{{shortID .Note.ID}}</a></strong></div>
+  {{end}}
   {{if .Linked}}
   <div><span>Invoice</span><strong><a class="doc-link" href="/invoices/{{.Linked.ID}}">{{shortID .Linked.ID}}</a></strong></div>
   {{end}}
@@ -79,9 +90,13 @@
     <span>2</span>
     <div><strong>Reserved</strong><small>Stock and credit checked</small></div>
   </div>
-  <div class="flow-step {{if .Linked}}current{{end}}">
+  <div class="flow-step {{if or (eq .Order.Status "dispatched") .Linked}}current{{end}}">
     <span>3</span>
-    <div><strong>Invoiced</strong><small>Revenue and COGS posted</small></div>
+    <div><strong>Dispatched</strong><small>Stock and COGS posted</small></div>
+  </div>
+  <div class="flow-step {{if .Linked}}current{{end}}">
+    <span>4</span>
+    <div><strong>Invoiced</strong><small>Receivable and revenue posted</small></div>
   </div>
 </section>
 {{end}}

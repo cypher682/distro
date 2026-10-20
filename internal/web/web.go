@@ -26,6 +26,8 @@ var pageTemplates = []string{
 	"catalog.html",
 	"orders.html",
 	"order.html",
+	"dispatch.html",
+	"delivery_note.html",
 	"purchasing.html",
 	"purchase_order.html",
 	"invoices.html",
@@ -58,6 +60,9 @@ type pageData struct {
 	Valuation      core.InventoryValuation
 	Orders         []core.Order
 	Order          core.Order
+	DeliveryNotes  []core.DeliveryNote
+	DeliveryNote   core.DeliveryNote
+	Note           *core.DeliveryNote
 	Invoices       []core.Invoice
 	Invoice        core.InvoiceDetail
 	Accounts       []core.AccountBalance
@@ -119,7 +124,12 @@ func New(svc *core.Service, tenantID string) http.Handler {
 	mux.HandleFunc("GET /orders/{id}", server.order)
 	mux.HandleFunc("POST /orders/{id}/reserve", server.reserveOrder)
 	mux.HandleFunc("POST /orders/{id}/cancel", server.cancelOrder)
+	mux.HandleFunc("POST /orders/{id}/delivery-notes", server.createDeliveryNote)
 	mux.HandleFunc("POST /orders/{id}/invoice", server.invoiceOrder)
+	mux.HandleFunc("GET /dispatch", server.dispatch)
+	mux.HandleFunc("GET /dispatch/{id}", server.deliveryNote)
+	mux.HandleFunc("POST /dispatch/{id}/dispatch", server.dispatchDeliveryNote)
+	mux.HandleFunc("POST /dispatch/{id}/cancel", server.cancelDeliveryNote)
 	mux.HandleFunc("GET /invoices", server.invoices)
 	mux.HandleFunc("GET /invoices/{id}", server.invoice)
 	mux.HandleFunc("POST /invoices/{id}/payments", server.recordPayment)
@@ -133,6 +143,7 @@ func parsePages() map[string]*template.Template {
 		"money":       money,
 		"shortID":     shortID,
 		"date":        formatDate,
+		"datePtr":     formatDatePtr,
 		"statusClass": statusClass,
 		"label":       label,
 		"amount":      amount,
@@ -637,12 +648,18 @@ func (s *Server) orders(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "Orders", err)
 		return
 	}
+	notes, err := s.svc.ListDeliveryNotes(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Orders", err)
+		return
+	}
 
 	data := s.page("Orders", "Orders", r)
 	data.Orders = orders
 	data.Products = products
 	data.Retailers = retailers
 	data.Invoices = invoices
+	data.DeliveryNotes = notes
 	data.ProductsBy = productMap(products)
 	data.RetailersBy = retailerMap(retailers)
 	s.render(w, "orders.html", data)
@@ -718,6 +735,12 @@ func (s *Server) order(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if note, err := s.svc.GetDeliveryNoteForOrder(r.Context(), s.tenantID, order.ID); err == nil {
+		data.Note = &note
+	} else if !errors.Is(err, core.ErrNotFound) {
+		s.fail(w, "Order", err)
+		return
+	}
 	s.render(w, "order.html", data)
 }
 
@@ -746,7 +769,117 @@ func (s *Server) invoiceOrder(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "/orders/"+orderID, "error", publicError(err))
 		return
 	}
-	s.redirect(w, r, "/invoices/"+invoice.ID, "flash", "Order invoiced. Stock, COGS, and revenue posted.")
+	s.redirect(w, r, "/invoices/"+invoice.ID, "flash", "Order invoiced. Receivable and revenue posted.")
+}
+
+func (s *Server) createDeliveryNote(w http.ResponseWriter, r *http.Request) {
+	orderID := r.PathValue("id")
+	note, err := s.svc.CreateDeliveryNote(r.Context(), s.tenantID, orderID)
+	if err != nil {
+		s.redirect(w, r, "/orders/"+orderID, "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/dispatch/"+note.ID, "flash", "Delivery note created. Pick the order, then dispatch.")
+}
+
+func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
+	notes, err := s.svc.ListDeliveryNotes(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Dispatch", err)
+		return
+	}
+	retailers, err := s.svc.ListRetailers(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Dispatch", err)
+		return
+	}
+	products, err := s.svc.ListProducts(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Dispatch", err)
+		return
+	}
+	orders, err := s.svc.ListOrders(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Dispatch", err)
+		return
+	}
+
+	data := s.page("Dispatch", "Dispatch", r)
+	data.DeliveryNotes = notes
+	data.Orders = orders
+	data.Retailers = retailers
+	data.Products = products
+	data.RetailersBy = retailerMap(retailers)
+	data.ProductsBy = productMap(products)
+	s.render(w, "dispatch.html", data)
+}
+
+func (s *Server) deliveryNote(w http.ResponseWriter, r *http.Request) {
+	note, err := s.svc.GetDeliveryNote(r.Context(), s.tenantID, r.PathValue("id"))
+	if err != nil {
+		s.failStatus(w, "Delivery note", err)
+		return
+	}
+	order, err := s.svc.GetOrder(r.Context(), s.tenantID, note.OrderID)
+	if err != nil {
+		s.fail(w, "Delivery note", err)
+		return
+	}
+	products, err := s.svc.ListProducts(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Delivery note", err)
+		return
+	}
+	retailers, err := s.svc.ListRetailers(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Delivery note", err)
+		return
+	}
+	warehouses, err := s.svc.ListWarehouses(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Delivery note", err)
+		return
+	}
+	invoices, err := s.svc.ListInvoices(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Delivery note", err)
+		return
+	}
+
+	data := s.page("Delivery "+shortID(note.ID), "Dispatch", r)
+	data.DeliveryNote = note
+	data.Order = order
+	data.Products = products
+	data.Retailers = retailers
+	data.Warehouses = warehouses
+	data.ProductsBy = productMap(products)
+	data.RetailersBy = retailerMap(retailers)
+	data.WarehousesBy = warehouseMap(warehouses)
+	for i := range invoices {
+		if invoices[i].OrderID == note.OrderID {
+			data.Linked = &invoices[i]
+			break
+		}
+	}
+	s.render(w, "delivery_note.html", data)
+}
+
+func (s *Server) dispatchDeliveryNote(w http.ResponseWriter, r *http.Request) {
+	noteID := r.PathValue("id")
+	if _, err := s.svc.DispatchDeliveryNote(r.Context(), s.tenantID, noteID); err != nil {
+		s.redirect(w, r, "/dispatch/"+noteID, "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/dispatch/"+noteID, "flash", "Delivery dispatched. Stock and COGS posted.")
+}
+
+func (s *Server) cancelDeliveryNote(w http.ResponseWriter, r *http.Request) {
+	noteID := r.PathValue("id")
+	if _, err := s.svc.CancelDeliveryNote(r.Context(), s.tenantID, noteID); err != nil {
+		s.redirect(w, r, "/dispatch/"+noteID, "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/dispatch/"+noteID, "flash", "Delivery note cancelled. Stock remains reserved.")
 }
 
 func (s *Server) invoices(w http.ResponseWriter, r *http.Request) {
@@ -1195,6 +1328,19 @@ func invoiceBalance(invoice core.Invoice) int64 {
 	return invoice.TotalCents - invoice.PaidCents - invoice.ReturnedCents
 }
 
+func (d pageData) OrderHasDeliveryNote(orderID string) bool {
+	return d.DeliveryNoteForOrder(orderID) != nil
+}
+
+func (d pageData) DeliveryNoteForOrder(orderID string) *core.DeliveryNote {
+	for i := range d.DeliveryNotes {
+		if d.DeliveryNotes[i].OrderID == orderID && d.DeliveryNotes[i].Status != "cancelled" {
+			return &d.DeliveryNotes[i]
+		}
+	}
+	return nil
+}
+
 func (d pageData) InvoiceForOrder(orderID string) *core.Invoice {
 	for i := range d.Invoices {
 		if d.Invoices[i].OrderID == orderID {
@@ -1229,6 +1375,13 @@ func shortID(id string) string {
 	return id[:8]
 }
 
+func formatDatePtr(value *time.Time) string {
+	if value == nil {
+		return "—"
+	}
+	return formatDate(*value)
+}
+
 func formatDate(value time.Time) string {
 	if value.IsZero() {
 		return "—"
@@ -1238,9 +1391,9 @@ func formatDate(value time.Time) string {
 
 func statusClass(status string) string {
 	switch status {
-	case "paid", "invoiced", "received":
+	case "paid", "invoiced", "received", "dispatched":
 		return "good"
-	case "reserved", "open", "ordered":
+	case "reserved", "open", "ordered", "picking":
 		return "warn"
 	case "cancelled", "void":
 		return "muted"

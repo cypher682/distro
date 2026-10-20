@@ -74,7 +74,8 @@ the seeded demo tenant and has no authentication. Use it to:
   page;
 - create a purchase order, receive it into stock, or cancel it before receipt;
 - receive stock or post a negative adjustment;
-- create a draft order, reserve it, cancel it, or issue an invoice;
+- create a draft order, reserve it, cancel it, pick and dispatch it, or issue an
+  invoice;
 - record a payment or return goods with or without restocking;
 - verify the trial balance and inventory valuation on the ledger page.
 
@@ -103,8 +104,8 @@ curl -s http://localhost:8081/api/inventory/valuation | jq
 ```
 
 Both responses must contain `"balanced": true`. On a clean seed, inventory value
-is `2100000` cents. After an invoice, restocked return, and payment, the trial
-balance must still reconcile and inventory must equal the ledger balance.
+is `2100000` cents. After a dispatch, invoice, restocked return, and payment, the
+trial balance must still reconcile and inventory must equal the ledger balance.
 
 To verify catalog setup, open `/catalog`, create a product, retailer, warehouse,
 and supplier, then edit the product and confirm the new values appear in the
@@ -116,12 +117,19 @@ line total, accounts payable must increase by the order total, and both
 reconciliation endpoints must stay balanced. A second receive attempt must
 conflict; an unreceived order can be cancelled.
 
-To verify the console manually, open `/`, create and reserve an order, invoice
-it, record a partial payment, then return one unit from the invoice page. The
-invoice total, returned amount, payment history, and ledger must all update, and
-both reconciliation endpoints must stay balanced.
+To verify dispatch, reserve an order, open `/dispatch`, and create its delivery
+note. Stock must remain reserved, the note must be `picking`, and the ledger must
+not change. Dispatch the note: on-hand and reserved stock must both fall, COGS
+and inventory must increase by the issue cost, and the order must stay in credit
+exposure. The invoice action then posts only receivable and revenue. Cancelling a
+picking note must leave the order reserved and dispatchable again.
 
-To verify a return over the API, invoice a reserved order, then:
+To verify the console manually, open `/`, create and reserve an order, pick and
+dispatch it, invoice it, record a partial payment, then return one unit from the
+invoice page. The invoice total, returned amount, payment history, and ledger
+must all update, and both reconciliation endpoints must stay balanced.
+
+To verify a return over the API, dispatch and invoice an order, then:
 
 ```bash
 curl -s -X POST http://localhost:8081/api/invoices/$INVOICE_ID/returns \

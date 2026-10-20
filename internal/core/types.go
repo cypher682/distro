@@ -125,6 +125,29 @@ type Order struct {
 	CreatedAt  time.Time   `json:"created_at"`
 }
 
+type DeliveryNoteLine struct {
+	ID             string `json:"id"`
+	DeliveryNoteID string `json:"delivery_note_id"`
+	OrderLineID    string `json:"order_line_id"`
+	ProductID      string `json:"product_id"`
+	WarehouseID    string `json:"warehouse_id"`
+	Quantity       int    `json:"quantity"`
+	UnitPriceCents int64  `json:"unit_price_cents"`
+	LineTotalCents int64  `json:"line_total_cents"`
+	TotalCostCents int64  `json:"total_cost_cents"`
+}
+
+type DeliveryNote struct {
+	ID             string             `json:"id"`
+	OrderID        string             `json:"order_id"`
+	RetailerID     string             `json:"retailer_id"`
+	Status         string             `json:"status"`
+	TotalCostCents int64              `json:"total_cost_cents"`
+	Lines          []DeliveryNoteLine `json:"lines"`
+	CreatedAt      time.Time          `json:"created_at"`
+	DispatchedAt   *time.Time         `json:"dispatched_at,omitempty"`
+}
+
 type Invoice struct {
 	ID            string        `json:"id"`
 	OrderID       string        `json:"order_id"`

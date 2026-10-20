@@ -305,6 +305,51 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 		writeJSON(w, http.StatusOK, order)
 	})
 
+	mux.HandleFunc("POST /api/orders/{id}/delivery-notes", func(w http.ResponseWriter, r *http.Request) {
+		note, err := svc.CreateDeliveryNote(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, note)
+	})
+
+	mux.HandleFunc("GET /api/delivery-notes", func(w http.ResponseWriter, r *http.Request) {
+		notes, err := svc.ListDeliveryNotes(r.Context(), tenantID(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, notes)
+	})
+
+	mux.HandleFunc("GET /api/delivery-notes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		note, err := svc.GetDeliveryNote(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, note)
+	})
+
+	mux.HandleFunc("POST /api/delivery-notes/{id}/dispatch", func(w http.ResponseWriter, r *http.Request) {
+		note, err := svc.DispatchDeliveryNote(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, note)
+	})
+
+	mux.HandleFunc("POST /api/delivery-notes/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		note, err := svc.CancelDeliveryNote(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, note)
+	})
+
 	mux.HandleFunc("POST /api/orders/{id}/invoice", func(w http.ResponseWriter, r *http.Request) {
 		invoice, err := svc.InvoiceOrder(r.Context(), tenantID(r), r.PathValue("id"))
 		if err != nil {

@@ -312,6 +312,63 @@ func (s *Service) CancelOrder(ctx context.Context, tenantID, orderID string) (Or
 	return s.store.CancelOrder(ctx, tenantID, orderID)
 }
 
+func (s *Service) CreateDeliveryNote(ctx context.Context, tenantID, orderID string) (DeliveryNote, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if orderID == "" {
+		return DeliveryNote{}, fmt.Errorf("%w: order_id is required", ErrInvalid)
+	}
+	return s.store.CreateDeliveryNote(ctx, tenantID, orderID)
+}
+
+func (s *Service) ListDeliveryNotes(ctx context.Context, tenantID string) ([]DeliveryNote, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.ListDeliveryNotes(ctx, tenantID)
+}
+
+func (s *Service) GetDeliveryNote(ctx context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if deliveryNoteID == "" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery_note_id is required", ErrInvalid)
+	}
+	return s.store.GetDeliveryNote(ctx, tenantID, deliveryNoteID)
+}
+
+func (s *Service) GetDeliveryNoteForOrder(ctx context.Context, tenantID, orderID string) (DeliveryNote, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if orderID == "" {
+		return DeliveryNote{}, fmt.Errorf("%w: order_id is required", ErrInvalid)
+	}
+	return s.store.GetDeliveryNoteForOrder(ctx, tenantID, orderID)
+}
+
+func (s *Service) DispatchDeliveryNote(ctx context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if deliveryNoteID == "" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery_note_id is required", ErrInvalid)
+	}
+	return s.store.DispatchDeliveryNote(ctx, tenantID, deliveryNoteID)
+}
+
+func (s *Service) CancelDeliveryNote(ctx context.Context, tenantID, deliveryNoteID string) (DeliveryNote, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return DeliveryNote{}, err
+	}
+	if deliveryNoteID == "" {
+		return DeliveryNote{}, fmt.Errorf("%w: delivery_note_id is required", ErrInvalid)
+	}
+	return s.store.CancelDeliveryNote(ctx, tenantID, deliveryNoteID)
+}
+
 func (s *Service) InvoiceOrder(ctx context.Context, tenantID, orderID string) (Invoice, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return Invoice{}, err
