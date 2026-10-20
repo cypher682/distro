@@ -61,13 +61,53 @@ type Order struct {
 }
 
 type Invoice struct {
-	ID         string    `json:"id"`
-	OrderID    string    `json:"order_id"`
-	RetailerID string    `json:"retailer_id"`
-	Status     string    `json:"status"`
-	TotalCents int64     `json:"total_cents"`
-	PaidCents  int64     `json:"paid_cents"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID            string        `json:"id"`
+	OrderID       string        `json:"order_id"`
+	RetailerID    string        `json:"retailer_id"`
+	Status        string        `json:"status"`
+	TotalCents    int64         `json:"total_cents"`
+	PaidCents     int64         `json:"paid_cents"`
+	ReturnedCents int64         `json:"returned_cents"`
+	Lines         []InvoiceLine `json:"lines"`
+	CreatedAt     time.Time     `json:"created_at"`
+}
+
+type InvoiceLine struct {
+	ID             string `json:"id"`
+	InvoiceID      string `json:"invoice_id"`
+	ProductID      string `json:"product_id"`
+	WarehouseID    string `json:"warehouse_id"`
+	Quantity       int    `json:"quantity"`
+	UnitPriceCents int64  `json:"unit_price_cents"`
+	LineTotalCents int64  `json:"line_total_cents"`
+	TotalCostCents int64  `json:"total_cost_cents"`
+}
+
+type SalesReturn struct {
+	ID               string            `json:"id"`
+	InvoiceID        string            `json:"invoice_id"`
+	RetailerID       string            `json:"retailer_id"`
+	TotalRefundCents int64             `json:"total_refund_cents"`
+	TotalCostCents   int64             `json:"total_cost_cents"`
+	Lines            []SalesReturnLine `json:"lines"`
+	CreatedAt        time.Time         `json:"created_at"`
+}
+
+type SalesReturnLine struct {
+	ID            string `json:"id"`
+	SalesReturnID string `json:"sales_return_id"`
+	InvoiceLineID string `json:"invoice_line_id"`
+	ProductID     string `json:"product_id"`
+	Quantity      int    `json:"quantity"`
+	RefundCents   int64  `json:"refund_cents"`
+	CostCents     int64  `json:"cost_cents"`
+	Restock       bool   `json:"restock"`
+}
+
+type CreateReturnLine struct {
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+	Restock   bool   `json:"restock"`
 }
 
 type Payment struct {

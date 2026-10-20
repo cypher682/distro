@@ -8,6 +8,7 @@ MVP scaffold for the distributor and wholesale commerce platform.
 - append-only stock movements and reservations
 - order lifecycle and credit exposure
 - weighted-average inventory costing and cost of goods sold
+- sales returns with restock or damage handling
 - invoice and double-entry ledger posting
 - JSON API for ordering and operations stock flows
 
@@ -54,6 +55,11 @@ curl -s http://localhost:8081/api/retailers/00000000-0000-0000-0000-000000000020
 INVOICE=$(curl -s -X POST http://localhost:8081/api/orders/$ORDER_ID/invoice)
 INVOICE_ID=$(echo "$INVOICE" | jq -r .id)
 
+# Return one unit to stock
+curl -s -X POST http://localhost:8081/api/invoices/$INVOICE_ID/returns \
+  -H 'Content-Type: application/json' \
+  -d '{"lines":[{"product_id":"00000000-0000-0000-0000-000000000101","quantity":1}]}' | jq
+
 # Pay part of the invoice, then check the ledger
 curl -s -X POST http://localhost:8081/api/invoices/$INVOICE_ID/payments \
   -H 'Content-Type: application/json' \
@@ -66,8 +72,8 @@ curl -s http://localhost:8081/api/inventory/valuation | jq
 ```
 
 The trial balance response includes a `balanced` flag. It must stay `true` after
-every stock receipt, adjustment, invoice, and payment. The valuation response
-reconciles on-hand stock value, the inventory account, and posted COGS.
+every stock receipt, adjustment, invoice, return, and payment. The valuation
+response reconciles on-hand stock value, the inventory account, and posted COGS.
 
 ## API
 
@@ -85,6 +91,7 @@ reconciles on-hand stock value, the inventory account, and posted COGS.
 | POST | `/api/orders/{id}/invoice` | Invoice a reserved order and post the ledger |
 | GET | `/api/retailers/{id}/credit` | Credit limit, exposure, and availability |
 | POST | `/api/invoices/{id}/payments` | Record a payment |
+| POST | `/api/invoices/{id}/returns` | Return invoiced goods and post the credit |
 | GET | `/api/ledger/trial-balance` | Account balances and balance check |
 
 Requests use `X-Tenant-ID`; it defaults to the seeded demo tenant.
@@ -92,6 +99,11 @@ Requests use `X-Tenant-ID`; it defaults to the seeded demo tenant.
 Stock receipts use a positive `quantity` and `unit_cost_cents`. Negative
 quantities are adjustments: they are valued at the current weighted average,
 posted to inventory shrinkage, and cannot consume reserved stock.
+
+Returns default to `"restock": true`: goods come back at the original invoice
+cost, inventory is restored, and COGS is reversed. Set `"restock": false` for
+damaged goods; the receivable is still reduced but the cost stays in COGS. Cash
+refunds are handled outside the API.
 
 ## Concurrency check
 
@@ -153,8 +165,10 @@ docs/adr/               decisions
 - One default warehouse per tenant; multi-warehouse allocation is deferred.
 - Invoicing is the dispatch proxy and writes stock and COGS movements. Picking
   and dispatch will replace this.
-- Costing is moving weighted average only. Landed costs, returns, FIFO/lots, and
-  period close are deferred.
+- Costing is moving weighted average only. Landed costs, FIFO/lots, and period
+  close are deferred.
+- Returns create a receivable credit but do not issue cash refunds or exchange
+  orders. A paid invoice can therefore carry a customer credit balance.
 - No tax yet.
 - No authentication or database RLS yet; tenant isolation is enforced by query
   filters and the `X-Tenant-ID` header.

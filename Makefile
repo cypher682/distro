@@ -18,7 +18,7 @@ fmt:
 	docker compose run --rm dev gofmt -w .
 
 seed:
-	docker compose exec db psql -U distro -d distro -f /docker-entrypoint-initdb.d/0004_seed.sql
+	docker compose exec db psql -U distro -d distro -f /docker-entrypoint-initdb.d/0005_seed.sql
 
 down:
 	docker compose down -v

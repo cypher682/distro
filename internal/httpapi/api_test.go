@@ -117,6 +117,84 @@ func TestOrderToPaymentFlow(t *testing.T) {
 	}
 }
 
+func TestSalesReturnEndpointUpdatesBalance(t *testing.T) {
+	router := apiRouter()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(`{
+		"retailer_id": "`+apiRetailer+`",
+		"lines": [{"product_id": "`+apiProduct+`", "quantity": 2}]
+	}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create order: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var order core.Order
+	if err := json.NewDecoder(createRec.Body).Decode(&order); err != nil {
+		t.Fatalf("decode order: %v", err)
+	}
+
+	reserveRequest := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/reserve", nil)
+	reserveRec := httptest.NewRecorder()
+	router.ServeHTTP(reserveRec, reserveRequest)
+	if reserveRec.Code != http.StatusOK {
+		t.Fatalf("reserve: expected 200, got %d: %s", reserveRec.Code, reserveRec.Body.String())
+	}
+
+	invoiceRequest := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/invoice", nil)
+	invoiceRec := httptest.NewRecorder()
+	router.ServeHTTP(invoiceRec, invoiceRequest)
+	if invoiceRec.Code != http.StatusCreated {
+		t.Fatalf("invoice: expected 201, got %d: %s", invoiceRec.Code, invoiceRec.Body.String())
+	}
+	var invoice core.Invoice
+	if err := json.NewDecoder(invoiceRec.Body).Decode(&invoice); err != nil {
+		t.Fatalf("decode invoice: %v", err)
+	}
+	if len(invoice.Lines) != 1 {
+		t.Fatalf("expected invoice lines, got %+v", invoice.Lines)
+	}
+
+	returnRequest := httptest.NewRequest(http.MethodPost, "/api/invoices/"+invoice.ID+"/returns", strings.NewReader(`{
+		"lines": [{"product_id": "`+apiProduct+`", "quantity": 1}]
+	}`))
+	returnRequest.Header.Set("Content-Type", "application/json")
+	returnRec := httptest.NewRecorder()
+	router.ServeHTTP(returnRec, returnRequest)
+	if returnRec.Code != http.StatusCreated {
+		t.Fatalf("return: expected 201, got %d: %s", returnRec.Code, returnRec.Body.String())
+	}
+	var salesReturn core.SalesReturn
+	if err := json.NewDecoder(returnRec.Body).Decode(&salesReturn); err != nil {
+		t.Fatalf("decode return: %v", err)
+	}
+	if salesReturn.TotalRefundCents != 1000 || len(salesReturn.Lines) != 1 || !salesReturn.Lines[0].Restock {
+		t.Fatalf("unexpected return: %+v", salesReturn)
+	}
+
+	creditRequest := httptest.NewRequest(http.MethodGet, "/api/retailers/"+apiRetailer+"/credit", nil)
+	creditRec := httptest.NewRecorder()
+	router.ServeHTTP(creditRec, creditRequest)
+	var credit core.CreditView
+	if err := json.NewDecoder(creditRec.Body).Decode(&credit); err != nil {
+		t.Fatalf("decode credit: %v", err)
+	}
+	if credit.ExposureCents != 1000 {
+		t.Fatalf("expected 1000 exposure after return, got %+v", credit)
+	}
+
+	overReturn := httptest.NewRequest(http.MethodPost, "/api/invoices/"+invoice.ID+"/returns", strings.NewReader(`{
+		"lines": [{"product_id": "`+apiProduct+`", "quantity": 2}]
+	}`))
+	overReturn.Header.Set("Content-Type", "application/json")
+	overRec := httptest.NewRecorder()
+	router.ServeHTTP(overRec, overReturn)
+	if overRec.Code != http.StatusConflict {
+		t.Fatalf("expected over-return conflict, got %d: %s", overRec.Code, overRec.Body.String())
+	}
+}
+
 func TestInventoryValuationEndpointReconciles(t *testing.T) {
 	router := apiRouter()
 

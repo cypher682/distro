@@ -18,7 +18,9 @@ type MemoryStore struct {
 	reservations  map[string]*memoryReservation
 	orders        map[string]map[string]*Order
 	invoices      map[string]map[string]*Invoice
+	invoiceLines  map[string][]InvoiceLine
 	payments      map[string]map[string]*Payment
+	returns       map[string]map[string]*SalesReturn
 	ledger        []memoryLedgerEntry
 }
 
@@ -51,7 +53,9 @@ func NewMemoryStore() *MemoryStore {
 		reservations:  make(map[string]*memoryReservation),
 		orders:        make(map[string]map[string]*Order),
 		invoices:      make(map[string]map[string]*Invoice),
+		invoiceLines:  make(map[string][]InvoiceLine),
 		payments:      make(map[string]map[string]*Payment),
+		returns:       make(map[string]map[string]*SalesReturn),
 	}
 }
 
@@ -359,6 +363,29 @@ func (m *MemoryStore) InvoiceOrder(_ context.Context, tenantID, orderID string) 
 		TotalCents: order.TotalCents,
 		CreatedAt:  time.Now().UTC(),
 	}
+	issueByProduct := make(map[string]issue, len(issues))
+	for _, item := range issues {
+		issueByProduct[item.reservation.ProductID] = item
+	}
+	lines := make([]InvoiceLine, 0, len(order.Lines))
+	for _, line := range order.Lines {
+		item, ok := issueByProduct[line.ProductID]
+		if !ok {
+			return Invoice{}, fmt.Errorf("%w: missing reservation for product %s", ErrConflict, line.ProductID)
+		}
+		lines = append(lines, InvoiceLine{
+			ID:             newID(),
+			InvoiceID:      invoice.ID,
+			ProductID:      line.ProductID,
+			WarehouseID:    item.reservation.WarehouseID,
+			Quantity:       line.Quantity,
+			UnitPriceCents: line.UnitPriceCents,
+			LineTotalCents: line.LineTotalCents,
+			TotalCostCents: item.costCents,
+		})
+	}
+	invoice.Lines = lines
+	m.invoiceLines[invoice.ID] = lines
 	m.tenantInvoices(tenantID)[invoice.ID] = &invoice
 
 	for _, item := range issues {
@@ -396,8 +423,8 @@ func (m *MemoryStore) GetCredit(_ context.Context, tenantID, retailerID string) 
 		CreditLimitCents: retailer.CreditLimitCents,
 	}
 	for _, invoice := range m.invoices[tenantID] {
-		if invoice.RetailerID == retailerID && invoice.Status == "open" {
-			view.OpenInvoiceCents += invoice.TotalCents - invoice.PaidCents
+		if invoice.RetailerID == retailerID && invoice.Status != "void" {
+			view.OpenInvoiceCents += invoice.TotalCents - invoice.PaidCents - invoice.ReturnedCents
 		}
 	}
 	for _, order := range m.orders[tenantID] {
@@ -422,7 +449,7 @@ func (m *MemoryStore) RecordPayment(_ context.Context, tenantID, invoiceID strin
 		return Payment{}, fmt.Errorf("%w: invoice %s is %s", ErrConflict, invoiceID, invoice.Status)
 	}
 
-	remaining := invoice.TotalCents - invoice.PaidCents
+	remaining := invoice.TotalCents - invoice.PaidCents - invoice.ReturnedCents
 	if amountCents > remaining {
 		return Payment{}, fmt.Errorf("%w: payment exceeds remaining invoice balance", ErrConflict)
 	}
@@ -436,7 +463,7 @@ func (m *MemoryStore) RecordPayment(_ context.Context, tenantID, invoiceID strin
 	m.tenantPayments(tenantID)[payment.ID] = &payment
 
 	invoice.PaidCents += amountCents
-	if invoice.PaidCents == invoice.TotalCents {
+	if invoice.PaidCents+invoice.ReturnedCents >= invoice.TotalCents {
 		invoice.Status = "paid"
 	}
 
@@ -445,6 +472,116 @@ func (m *MemoryStore) RecordPayment(_ context.Context, tenantID, invoiceID strin
 		memoryLedgerEntry{TenantID: tenantID, Account: "accounts_receivable", CreditCents: amountCents, ReferenceType: "payment", ReferenceID: payment.ID},
 	)
 	return payment, nil
+}
+
+func (m *MemoryStore) ReturnInvoice(_ context.Context, tenantID, invoiceID string, lines []CreateReturnLine) (SalesReturn, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	invoice, ok := m.invoices[tenantID][invoiceID]
+	if !ok {
+		return SalesReturn{}, fmt.Errorf("%w: invoice %s", ErrNotFound, invoiceID)
+	}
+	if invoice.Status == "void" {
+		return SalesReturn{}, fmt.Errorf("%w: invoice %s is void", ErrConflict, invoiceID)
+	}
+	invoiceLines := m.invoiceLines[invoiceID]
+	if len(invoiceLines) == 0 {
+		return SalesReturn{}, fmt.Errorf("%w: invoice %s has no lines", ErrConflict, invoiceID)
+	}
+
+	byProduct := make(map[string]InvoiceLine, len(invoiceLines))
+	warehouseByLineID := make(map[string]string, len(invoiceLines))
+	for _, line := range invoiceLines {
+		byProduct[line.ProductID] = line
+		warehouseByLineID[line.ID] = line.WarehouseID
+	}
+	returnedQuantity := make(map[string]int, len(invoiceLines))
+	returnedCost := make(map[string]int64, len(invoiceLines))
+	for _, existing := range m.returns[tenantID] {
+		if existing.InvoiceID != invoiceID {
+			continue
+		}
+		for _, line := range existing.Lines {
+			returnedQuantity[line.InvoiceLineID] += line.Quantity
+			returnedCost[line.InvoiceLineID] += line.CostCents
+		}
+	}
+
+	created := SalesReturn{
+		ID:         newID(),
+		InvoiceID:  invoiceID,
+		RetailerID: invoice.RetailerID,
+		CreatedAt:  time.Now().UTC(),
+	}
+	seen := make(map[string]struct{}, len(lines))
+	for _, request := range lines {
+		if request.ProductID == "" || request.Quantity <= 0 {
+			return SalesReturn{}, fmt.Errorf("%w: product_id and positive quantity are required", ErrInvalid)
+		}
+		if _, duplicate := seen[request.ProductID]; duplicate {
+			return SalesReturn{}, fmt.Errorf("%w: duplicate product_id %s", ErrInvalid, request.ProductID)
+		}
+		seen[request.ProductID] = struct{}{}
+
+		invoiceLine, ok := byProduct[request.ProductID]
+		if !ok {
+			return SalesReturn{}, fmt.Errorf("%w: product %s was not invoiced", ErrInvalid, request.ProductID)
+		}
+		remainingQuantity := invoiceLine.Quantity - returnedQuantity[invoiceLine.ID]
+		if request.Quantity > remainingQuantity {
+			return SalesReturn{}, fmt.Errorf("%w: return quantity exceeds remaining invoice quantity for product %s", ErrConflict, request.ProductID)
+		}
+		remainingCost := invoiceLine.TotalCostCents - returnedCost[invoiceLine.ID]
+		cost, err := issueCost(remainingCost, int64(request.Quantity), int64(remainingQuantity))
+		if err != nil {
+			return SalesReturn{}, err
+		}
+		line := SalesReturnLine{
+			ID:            newID(),
+			SalesReturnID: created.ID,
+			InvoiceLineID: invoiceLine.ID,
+			ProductID:     request.ProductID,
+			Quantity:      request.Quantity,
+			RefundCents:   int64(request.Quantity) * invoiceLine.UnitPriceCents,
+			CostCents:     cost,
+			Restock:       request.Restock,
+		}
+		created.Lines = append(created.Lines, line)
+		created.TotalRefundCents += line.RefundCents
+		created.TotalCostCents += line.CostCents
+	}
+
+	var restockCost int64
+	for _, line := range created.Lines {
+		if !line.Restock {
+			continue
+		}
+		key := stockKey(tenantID, line.ProductID, warehouseByLineID[line.InvoiceLineID])
+		m.onHand[key] += int64(line.Quantity)
+		m.inventoryCost[key] += line.CostCents
+		restockCost += line.CostCents
+	}
+
+	invoice.ReturnedCents += created.TotalRefundCents
+	if invoice.Status != "paid" && invoice.PaidCents+invoice.ReturnedCents >= invoice.TotalCents {
+		invoice.Status = "paid"
+	}
+	m.tenantReturns(tenantID)[created.ID] = &created
+
+	if created.TotalRefundCents > 0 {
+		m.ledger = append(m.ledger,
+			memoryLedgerEntry{TenantID: tenantID, Account: "sales_returns", DebitCents: created.TotalRefundCents, ReferenceType: "sales_return", ReferenceID: created.ID},
+			memoryLedgerEntry{TenantID: tenantID, Account: "accounts_receivable", CreditCents: created.TotalRefundCents, ReferenceType: "sales_return", ReferenceID: created.ID},
+		)
+	}
+	if restockCost > 0 {
+		m.ledger = append(m.ledger,
+			memoryLedgerEntry{TenantID: tenantID, Account: "inventory", DebitCents: restockCost, ReferenceType: "sales_return", ReferenceID: created.ID},
+			memoryLedgerEntry{TenantID: tenantID, Account: "cost_of_goods_sold", CreditCents: restockCost, ReferenceType: "sales_return", ReferenceID: created.ID},
+		)
+	}
+	return created, nil
 }
 
 func (m *MemoryStore) Valuation(_ context.Context, tenantID string) (InventoryValuation, error) {
@@ -530,8 +667,8 @@ func (m *MemoryStore) TrialBalance(_ context.Context, tenantID string) ([]Accoun
 func (m *MemoryStore) exposureLocked(tenantID, retailerID string) int64 {
 	var exposure int64
 	for _, invoice := range m.invoices[tenantID] {
-		if invoice.RetailerID == retailerID && invoice.Status == "open" {
-			exposure += invoice.TotalCents - invoice.PaidCents
+		if invoice.RetailerID == retailerID && invoice.Status != "void" {
+			exposure += invoice.TotalCents - invoice.PaidCents - invoice.ReturnedCents
 		}
 	}
 	for _, order := range m.orders[tenantID] {
@@ -607,6 +744,13 @@ func (m *MemoryStore) tenantPayments(tenantID string) map[string]*Payment {
 		m.payments[tenantID] = make(map[string]*Payment)
 	}
 	return m.payments[tenantID]
+}
+
+func (m *MemoryStore) tenantReturns(tenantID string) map[string]*SalesReturn {
+	if m.returns[tenantID] == nil {
+		m.returns[tenantID] = make(map[string]*SalesReturn)
+	}
+	return m.returns[tenantID]
 }
 
 func stockKey(tenantID, productID, warehouseID string) string {

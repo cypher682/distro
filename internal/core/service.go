@@ -151,6 +151,35 @@ func (s *Service) RecordPayment(ctx context.Context, tenantID, invoiceID string,
 	return s.store.RecordPayment(ctx, tenantID, invoiceID, amountCents)
 }
 
+func (s *Service) ReturnInvoice(ctx context.Context, tenantID, invoiceID string, lines []CreateReturnLine) (SalesReturn, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return SalesReturn{}, err
+	}
+	if invoiceID == "" {
+		return SalesReturn{}, fmt.Errorf("%w: invoice_id is required", ErrInvalid)
+	}
+	if len(lines) == 0 {
+		return SalesReturn{}, fmt.Errorf("%w: at least one return line is required", ErrInvalid)
+	}
+
+	seen := make(map[string]struct{}, len(lines))
+	clean := make([]CreateReturnLine, 0, len(lines))
+	for _, line := range lines {
+		if line.ProductID == "" {
+			return SalesReturn{}, fmt.Errorf("%w: product_id is required", ErrInvalid)
+		}
+		if line.Quantity <= 0 {
+			return SalesReturn{}, fmt.Errorf("%w: quantity must be positive", ErrInvalid)
+		}
+		if _, ok := seen[line.ProductID]; ok {
+			return SalesReturn{}, fmt.Errorf("%w: duplicate product_id %s", ErrInvalid, line.ProductID)
+		}
+		seen[line.ProductID] = struct{}{}
+		clean = append(clean, line)
+	}
+	return s.store.ReturnInvoice(ctx, tenantID, invoiceID, clean)
+}
+
 func (s *Service) Valuation(ctx context.Context, tenantID string) (InventoryValuation, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return InventoryValuation{}, err

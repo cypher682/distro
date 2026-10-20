@@ -39,7 +39,9 @@ behavior for tests.
 | `stock_movements` | Append-only quantity and cost movements |
 | `reservations` | Active, released, or fulfilled order allocations |
 | `orders`, `order_lines` | Draft-to-invoiced sales orders |
-| `invoices`, `payments` | Receivables and cash application |
+| `invoices`, `invoice_lines` | Receivables and immutable invoice cost snapshots |
+| `payments` | Cash application |
+| `sales_returns`, `sales_return_lines` | Restocked or damaged returned goods |
 | `ledger_entries` | Double-entry accounting entries |
 
 Money and costs are integer cents. Stock is derived from movements; there is no
@@ -52,16 +54,23 @@ mutable on-hand column.
 - Receipts and invoices lock product rows before reading stock balances, so
   concurrent reservations and issues serialize per product.
 - An order can be reserved only when stock and retailer credit are sufficient.
-- Credit exposure = unpaid open invoices plus reserved order value.
+- Credit exposure = unpaid invoice balances after returns plus reserved order
+  value. A fully returned paid invoice becomes a customer credit.
 - Invoice postings balance accounts receivable against revenue.
+- Invoice lines snapshot quantity, selling price, and total issue cost. This is
+  the source for exact partial-return refunds and cost reversals.
 - COGS postings balance cost of goods sold against inventory.
 - Stock valuation = sum of signed movement costs and must equal the inventory
   ledger balance.
 - Stock receipts post inventory against accounts payable; negative adjustments
   post inventory shrinkage against inventory.
+- Returns cannot exceed the remaining invoiced quantity. Restocked returns debit
+  inventory and credit COGS at the original invoice cost; damaged returns reduce
+  the receivable but leave the cost in COGS.
 
-See [ADR-0002](adr/0002-core-money-and-stock.md) and
-[ADR-0003](adr/0003-inventory-costing.md) for the accounting decisions.
+See [ADR-0002](adr/0002-core-money-and-stock.md),
+[ADR-0003](adr/0003-inventory-costing.md), and
+[ADR-0004](adr/0004-sales-returns.md) for the accounting decisions.
 
 ## Order flow
 
@@ -71,9 +80,11 @@ See [ADR-0002](adr/0002-core-money-and-stock.md) and
 3. `POST /api/orders/{id}/invoice` computes weighted-average issue cost, writes
    negative stock movements, marks reservations fulfilled, and posts revenue and
    COGS.
-4. `POST /api/invoices/{id}/payments` applies cash and reduces accounts
+4. `POST /api/invoices/{id}/returns` validates remaining quantities, credits
+   revenue against accounts receivable, and reverses COGS for restocked goods.
+5. `POST /api/invoices/{id}/payments` applies cash and reduces accounts
    receivable.
-5. `GET /api/ledger/trial-balance` and `GET /api/inventory/valuation` expose
+6. `GET /api/ledger/trial-balance` and `GET /api/inventory/valuation` expose
    reconciliation checks.
 
 ## Errors
@@ -92,6 +103,6 @@ trusted network. Do not expose the API to untrusted clients. See
 ## Deferred
 
 Procurement, picking and dispatch, multi-warehouse allocation, lots/FIFO, tax,
-period close, aging and dunning, public API credentials, webhooks, and a web UI
-are outside this slice. The modular package boundaries leave room to add them
+period close, cash refunds and exchanges, aging and dunning, public API
+credentials, webhooks, and a web UI are outside this slice. The modular package boundaries leave room to add them
 without splitting the service prematurely.

@@ -14,6 +14,7 @@ type Store interface {
 	InvoiceOrder(ctx context.Context, tenantID, orderID string) (Invoice, error)
 	GetCredit(ctx context.Context, tenantID, retailerID string) (CreditView, error)
 	RecordPayment(ctx context.Context, tenantID, invoiceID string, amountCents int64) (Payment, error)
+	ReturnInvoice(ctx context.Context, tenantID, invoiceID string, lines []CreateReturnLine) (SalesReturn, error)
 	Valuation(ctx context.Context, tenantID string) (InventoryValuation, error)
 	TrialBalance(ctx context.Context, tenantID string) ([]AccountBalance, error)
 }

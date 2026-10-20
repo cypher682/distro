@@ -19,7 +19,8 @@ services:
       - ./db/migrations/0001_init.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
       - ./db/migrations/0002_core.sql:/docker-entrypoint-initdb.d/0002_core.sql:ro
       - ./db/migrations/0003_costing.sql:/docker-entrypoint-initdb.d/0003_costing.sql:ro
-      - ./db/seed.sql:/docker-entrypoint-initdb.d/0004_seed.sql:ro
+      - ./db/migrations/0004_returns.sql:/docker-entrypoint-initdb.d/0004_returns.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/0005_seed.sql:ro
 
   api:
     build: .

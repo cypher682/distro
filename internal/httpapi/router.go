@@ -33,6 +33,16 @@ type paymentRequest struct {
 	AmountCents int64 `json:"amount_cents"`
 }
 
+type returnLineRequest struct {
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+	Restock   *bool  `json:"restock"`
+}
+
+type returnRequest struct {
+	Lines []returnLineRequest `json:"lines"`
+}
+
 type trialBalanceResponse struct {
 	Accounts    []core.AccountBalance `json:"accounts"`
 	DebitCents  int64                 `json:"debit_cents"`
@@ -185,6 +195,32 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusCreated, payment)
+	})
+
+	mux.HandleFunc("POST /api/invoices/{id}/returns", func(w http.ResponseWriter, r *http.Request) {
+		var request returnRequest
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		lines := make([]core.CreateReturnLine, 0, len(request.Lines))
+		for _, line := range request.Lines {
+			restock := true
+			if line.Restock != nil {
+				restock = *line.Restock
+			}
+			lines = append(lines, core.CreateReturnLine{
+				ProductID: line.ProductID,
+				Quantity:  line.Quantity,
+				Restock:   restock,
+			})
+		}
+		salesReturn, err := svc.ReturnInvoice(r.Context(), tenantID(r), r.PathValue("id"), lines)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, salesReturn)
 	})
 
 	mux.HandleFunc("GET /api/ledger/trial-balance", func(w http.ResponseWriter, r *http.Request) {

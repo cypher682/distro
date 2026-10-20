@@ -86,7 +86,20 @@ curl -s http://localhost:8081/api/inventory/valuation | jq
 ```
 
 Both responses must contain `"balanced": true`. On a clean seed, inventory value
-is `2100000` cents.
+is `2100000` cents. After an invoice, restocked return, and payment, the trial
+balance must still reconcile and inventory must equal the ledger balance.
+
+To verify a return manually, invoice a reserved order, then:
+
+```bash
+curl -s -X POST http://localhost:8081/api/invoices/$INVOICE_ID/returns \
+  -H 'Content-Type: application/json' \
+  -d '{"lines":[{"product_id":"00000000-0000-0000-0000-000000000101","quantity":1}]}' | jq
+```
+
+The response contains `total_refund_cents` and `total_cost_cents`. A restocked
+return credits COGS and restores inventory; `"restock": false` leaves both
+unchanged. Credit exposure drops by the refund.
 
 ## Deployment notes
 

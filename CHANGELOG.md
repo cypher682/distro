@@ -14,5 +14,7 @@ All notable changes to this project are documented here. The format follows
 - Double-entry ledger with trial balance reconciliation.
 - Moving weighted-average inventory costing, COGS postings, shrinkage, and
   inventory valuation reconciliation.
+- Sales returns with invoice cost snapshots, restock or damage handling,
+  receivable credits, and exact COGS reversal.
 - PostgreSQL and in-memory stores, HTTP API, Docker Compose stack, and CI.
 - Architecture, operations, security, contribution, and ADR documentation.

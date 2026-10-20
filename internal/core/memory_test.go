@@ -317,6 +317,119 @@ func TestWeightedAverageRoundingReconcilesToZero(t *testing.T) {
 	assertLedgerBalanced(t, svc)
 }
 
+func TestSalesReturnRestocksAndReversesCogs(t *testing.T) {
+	store, svc := testService(t, 10, 100000)
+	store.SetStockValue(testTenant, testProduct, testWarehouse, 10, 1000)
+	order := createOrder(t, svc, 4)
+
+	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
+		t.Fatalf("reserve order: %v", err)
+	}
+	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
+	if err != nil {
+		t.Fatalf("invoice order: %v", err)
+	}
+	if len(invoice.Lines) != 1 || invoice.Lines[0].TotalCostCents != 400 {
+		t.Fatalf("unexpected invoice lines: %+v", invoice.Lines)
+	}
+
+	salesReturn, err := svc.ReturnInvoice(context.Background(), testTenant, invoice.ID, []CreateReturnLine{
+		{ProductID: testProduct, Quantity: 2, Restock: true},
+	})
+	if err != nil {
+		t.Fatalf("return invoice: %v", err)
+	}
+	if salesReturn.TotalRefundCents != 2000 || salesReturn.TotalCostCents != 200 {
+		t.Fatalf("unexpected return totals: %+v", salesReturn)
+	}
+
+	valuation, err := svc.Valuation(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("valuation: %v", err)
+	}
+	if valuation.TotalValueCents != 800 || valuation.LedgerInventoryCents != 800 {
+		t.Fatalf("unexpected inventory valuation: %+v", valuation)
+	}
+	if valuation.CogsCents != 200 {
+		t.Fatalf("expected cogs 200, got %d", valuation.CogsCents)
+	}
+	if !valuation.Balanced {
+		t.Fatalf("expected valuation to reconcile: %+v", valuation)
+	}
+
+	assertLedgerBalanced(t, svc)
+}
+
+func TestSalesReturnNonRestockKeepsCogs(t *testing.T) {
+	store, svc := testService(t, 10, 100000)
+	store.SetStockValue(testTenant, testProduct, testWarehouse, 10, 1000)
+	order := createOrder(t, svc, 2)
+
+	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
+		t.Fatalf("reserve order: %v", err)
+	}
+	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
+	if err != nil {
+		t.Fatalf("invoice order: %v", err)
+	}
+
+	if _, err := svc.ReturnInvoice(context.Background(), testTenant, invoice.ID, []CreateReturnLine{
+		{ProductID: testProduct, Quantity: 1, Restock: false},
+	}); err != nil {
+		t.Fatalf("return invoice: %v", err)
+	}
+
+	valuation, err := svc.Valuation(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("valuation: %v", err)
+	}
+	if valuation.TotalValueCents != 800 || valuation.LedgerInventoryCents != 800 {
+		t.Fatalf("unexpected inventory valuation: %+v", valuation)
+	}
+	if valuation.CogsCents != 200 {
+		t.Fatalf("expected cogs 200, got %d", valuation.CogsCents)
+	}
+	if !valuation.Balanced {
+		t.Fatalf("expected valuation to reconcile: %+v", valuation)
+	}
+	assertLedgerBalanced(t, svc)
+}
+
+func TestSalesReturnCannotExceedInvoicedQuantity(t *testing.T) {
+	store, svc := testService(t, 10, 100000)
+	store.SetStockValue(testTenant, testProduct, testWarehouse, 10, 1000)
+	order := createOrder(t, svc, 2)
+
+	if _, err := svc.ReserveOrder(context.Background(), testTenant, order.ID); err != nil {
+		t.Fatalf("reserve order: %v", err)
+	}
+	invoice, err := svc.InvoiceOrder(context.Background(), testTenant, order.ID)
+	if err != nil {
+		t.Fatalf("invoice order: %v", err)
+	}
+
+	_, err = svc.ReturnInvoice(context.Background(), testTenant, invoice.ID, []CreateReturnLine{
+		{ProductID: testProduct, Quantity: 3, Restock: true},
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected over-return conflict, got %v", err)
+	}
+
+	if _, err := svc.ReturnInvoice(context.Background(), testTenant, invoice.ID, []CreateReturnLine{
+		{ProductID: testProduct, Quantity: 2, Restock: true},
+	}); err != nil {
+		t.Fatalf("return full quantity: %v", err)
+	}
+
+	_, err = svc.ReturnInvoice(context.Background(), testTenant, invoice.ID, []CreateReturnLine{
+		{ProductID: testProduct, Quantity: 1, Restock: true},
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected conflict after full return, got %v", err)
+	}
+	assertLedgerBalanced(t, svc)
+}
+
 func TestStockAdjustmentUsesAverageCost(t *testing.T) {
 	store, svc := testService(t, 10, 100000)
 	store.SetStockValue(testTenant, testProduct, testWarehouse, 10, 1000)

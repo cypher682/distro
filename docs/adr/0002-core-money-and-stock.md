@@ -1,6 +1,6 @@
 # ADR 0002: Core money and stock invariants
 
-Status: accepted
+Status: accepted; costing and returns extended by ADR-0003 and ADR-0004
 Date: 2026-10-20
 
 ## Context
