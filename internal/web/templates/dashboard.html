@@ -1,0 +1,147 @@
+{{define "content"}}
+<section class="metrics" aria-label="Key figures">
+  <div class="metric">
+    <span class="metric-label">Inventory at cost</span>
+    <span class="metric-value">{{money .Valuation.TotalValueCents}}</span>
+    <span class="metric-note">{{len .Stock}} stock positions</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Open receivable</span>
+    <span class="metric-value">{{money .OpenCents}}</span>
+    <span class="metric-note">Latest 100 invoices after credits</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">COGS posted</span>
+    <span class="metric-value">{{money .Valuation.CogsCents}}</span>
+    <span class="metric-note">Moving weighted average</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Returns credited</span>
+    <span class="metric-value">{{money .Returned}}</span>
+    <span class="metric-note">Latest 100 invoices</span>
+  </div>
+</section>
+
+<div class="grid grid-2-1">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Recent invoices</h2>
+        <p>Latest receivables and their remaining balance.</p>
+      </div>
+      <a class="link" href="/invoices">All invoices</a>
+    </div>
+    {{if .Invoices}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Invoice</th>
+            <th scope="col">Retailer</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Total</th>
+            <th scope="col" class="num">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Invoices}}
+          <tr>
+            <td><a class="doc-link" href="/invoices/{{.ID}}">{{shortID .ID}}</a><small>{{date .CreatedAt}}</small></td>
+            <td>{{$.RetailerName .RetailerID}}</td>
+            <td>{{template "status" .Status}}</td>
+            <td class="num">{{money .TotalCents}}</td>
+            <td class="num">{{money ($.InvoiceBalance .)}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No invoices yet. Invoicing a reserved order will create the first one.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Ledger check</h2>
+        <p>Debits must equal credits.</p>
+      </div>
+      {{if .Balanced}}<span class="tag tag-good">Balanced</span>{{else}}<span class="tag tag-alert">Out of balance</span>{{end}}
+    </div>
+    <dl class="figure-list">
+      <div><dt>Debits</dt><dd>{{money .DebitCents}}</dd></div>
+      <div><dt>Credits</dt><dd>{{money .CreditCents}}</dd></div>
+      <div><dt>Inventory ledger</dt><dd>{{money .Valuation.LedgerInventoryCents}}</dd></div>
+    </dl>
+    <a class="button button-secondary button-block" href="/ledger">Open ledger</a>
+  </aside>
+</div>
+
+<div class="grid grid-2-1">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Stock position</h2>
+        <p>On-hand, reserved, and available by product.</p>
+      </div>
+      <a class="link" href="/inventory">Manage stock</a>
+    </div>
+    {{if .Stock}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Product</th>
+            <th scope="col" class="num">On hand</th>
+            <th scope="col" class="num">Reserved</th>
+            <th scope="col" class="num">Available</th>
+            <th scope="col" class="num">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Stock}}
+          <tr>
+            <td><span class="strong">{{$.ProductName .ProductID}}</span><small>{{$.ProductSKU .ProductID}} · {{$.WarehouseName .WarehouseID}}</small></td>
+            <td class="num">{{.OnHand}}</td>
+            <td class="num">{{.Reserved}}</td>
+            <td class="num">{{if le .Available 10}}<span class="tag tag-warn">Low</span> {{end}}{{.Available}}</td>
+            <td class="num">{{money .InventoryValueCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No stock positions. Add products and receive stock to begin.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Credit watch</h2>
+        <p>Exposure against each retailer limit.</p>
+      </div>
+    </div>
+    {{if .Credit}}
+    <div class="stack">
+      {{range .Credit}}
+      <div class="credit-row">
+        <div class="credit-head">
+          <span class="strong">{{.Retailer.Name}}</span>
+          <span class="num">{{money .Credit.AvailableCents}} left</span>
+        </div>
+        <div class="credit-meta">
+          <span>{{money .Credit.ExposureCents}} exposure</span>
+          <span>of {{money .Credit.CreditLimitCents}}</span>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No retailers yet.</div>
+    {{end}}
+  </aside>
+</div>
+{{end}}

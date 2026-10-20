@@ -19,6 +19,11 @@ type Product struct {
 	PriceCents int64  `json:"price_cents"`
 }
 
+type Warehouse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type Retailer struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
@@ -81,6 +86,12 @@ type InvoiceLine struct {
 	UnitPriceCents int64  `json:"unit_price_cents"`
 	LineTotalCents int64  `json:"line_total_cents"`
 	TotalCostCents int64  `json:"total_cost_cents"`
+}
+
+type InvoiceDetail struct {
+	Invoice
+	Returns  []SalesReturn `json:"returns"`
+	Payments []Payment     `json:"payments"`
 }
 
 type SalesReturn struct {

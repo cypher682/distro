@@ -1,0 +1,207 @@
+{{define "content"}}
+<div class="doc-head">
+  <div>
+    <p class="doc-kicker">Invoice</p>
+    <h2 class="doc-title">{{shortID .Invoice.ID}}</h2>
+    <p class="doc-sub">{{.RetailerName .Invoice.RetailerID}} · {{date .Invoice.CreatedAt}}</p>
+  </div>
+  <div class="doc-actions">
+    <a class="button button-secondary" href="/orders/{{.Invoice.OrderID}}">View order</a>
+  </div>
+</div>
+
+<div class="doc-meta">
+  <div><span>Status</span><strong>{{template "status" .Invoice.Status}}</strong></div>
+  <div><span>Invoice total</span><strong class="num">{{money .Invoice.TotalCents}}</strong></div>
+  <div><span>Paid</span><strong class="num">{{money .Invoice.PaidCents}}</strong></div>
+  <div><span>Returned</span><strong class="num">{{money .Invoice.ReturnedCents}}</strong></div>
+  <div><span>Balance</span><strong class="num">{{money .DetailBalance}}</strong></div>
+</div>
+
+<div class="grid grid-main-side">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Invoice lines</h2>
+        <p>Selling price and original issue cost.</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Product</th>
+            <th scope="col" class="num">Quantity</th>
+            <th scope="col" class="num">Unit price</th>
+            <th scope="col" class="num">Line total</th>
+            <th scope="col" class="num">Issue cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Invoice.Lines}}
+          <tr>
+            <td><span class="strong">{{$.ProductName .ProductID}}</span><small>{{$.ProductSKU .ProductID}} · {{$.WarehouseName .WarehouseID}}</small></td>
+            <td class="num">{{.Quantity}}</td>
+            <td class="num">{{money .UnitPriceCents}}</td>
+            <td class="num">{{money .LineTotalCents}}</td>
+            <td class="num">{{money .TotalCostCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row" colspan="3">Invoice total</th>
+            <td class="num">{{money .Invoice.TotalCents}}</td>
+            <td class="num">{{money .DetailCost}}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+
+  <aside class="panel panel-sticky">
+    <div class="panel-head">
+      <div>
+        <h2>Record payment</h2>
+        <p>Apply cash against the remaining balance.</p>
+      </div>
+    </div>
+    {{if and (eq .Invoice.Status "open") (gt .DetailBalance 0)}}
+    <form class="form" method="post" action="/invoices/{{.Invoice.ID}}/payments" onsubmit="return confirm('Post this payment?')">
+      <label>
+        <span>Amount</span>
+        <input name="amount" type="text" inputmode="decimal" placeholder="0.00" required>
+      </label>
+      <p class="hint">Remaining balance: {{money .DetailBalance}}. Payments cannot exceed the balance after returns.</p>
+      <button class="button" type="submit">Post payment</button>
+    </form>
+    {{else}}
+    <div class="empty">No payment is due. The invoice is {{.Invoice.Status}}.</div>
+    {{end}}
+  </aside>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Return goods</h2>
+      <p>Restocked goods reverse COGS. Damaged goods stay in COGS.</p>
+    </div>
+    <span class="count">{{.RemainingUnits}} returnable units</span>
+  </div>
+  {{if gt .RemainingUnits 0}}
+  <form method="post" action="/invoices/{{.Invoice.ID}}/returns" onsubmit="return confirm('Post this return? The receivable and inventory will be updated.')">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Product</th>
+            <th scope="col" class="num">Invoiced</th>
+            <th scope="col" class="num">Returned</th>
+            <th scope="col" class="num">Remaining</th>
+            <th scope="col" class="num">Return qty</th>
+            <th scope="col">Restock</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Invoice.Lines}}
+          {{$remaining := $.RemainingQty .ID .Quantity}}
+          <tr>
+            <td><span class="strong">{{$.ProductName .ProductID}}</span><small>{{$.ProductSKU .ProductID}}</small></td>
+            <td class="num">{{.Quantity}}</td>
+            <td class="num">{{$.ReturnedQty .ID}}</td>
+            <td class="num">{{$remaining}}</td>
+            <td class="num">
+              {{if gt $remaining 0}}
+              <input class="qty-input" name="qty_{{.ID}}" type="number" min="0" max="{{$remaining}}" step="1" value="0" aria-label="Return quantity for {{$.ProductName .ProductID}}">
+              {{else}}
+              <span class="tag tag-muted">Complete</span>
+              {{end}}
+            </td>
+            <td>
+              {{if gt $remaining 0}}
+              <label class="check"><input name="restock_{{.ID}}" type="checkbox" checked> Back to stock</label>
+              {{else}}—{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions form-actions-end">
+      <button class="button" type="submit">Post return</button>
+    </div>
+  </form>
+  {{else}}
+  <div class="empty">Every invoiced unit has been returned.</div>
+  {{end}}
+</section>
+
+<div class="grid grid-2">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Return history</h2>
+        <p>Receivable credits and cost reversals.</p>
+      </div>
+    </div>
+    {{if .Invoice.Returns}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Return</th>
+            <th scope="col">Handling</th>
+            <th scope="col" class="num">Refund</th>
+            <th scope="col" class="num">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Invoice.Returns}}
+          <tr>
+            <td><span class="strong">{{shortID .ID}}</span><small>{{date .CreatedAt}} · {{len .Lines}} lines</small></td>
+            <td><span class="tag tag-{{$.ReturnHandlingClass .}}">{{$.ReturnHandling .}}</span></td>
+            <td class="num">{{money .TotalRefundCents}}</td>
+            <td class="num">{{money .TotalCostCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No returns posted.</div>
+    {{end}}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Payment history</h2>
+        <p>Cash applied to this invoice.</p>
+      </div>
+    </div>
+    {{if .Invoice.Payments}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Payment</th>
+            <th scope="col" class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Invoice.Payments}}
+          <tr>
+            <td><span class="strong">{{shortID .ID}}</span><small>{{date .CreatedAt}}</small></td>
+            <td class="num">{{money .AmountCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No payments recorded.</div>
+    {{end}}
+  </section>
+</div>
+{{end}}

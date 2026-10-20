@@ -1,0 +1,51 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Distro</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <div class="shell">
+    <aside class="rail">
+      <a class="brand" href="/">
+        <span class="brand-mark">D</span>
+        <span class="brand-name">Distro<small>Operations</small></span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="/" {{if eq .Section "Overview"}}aria-current="page"{{end}}>Overview</a>
+        <a href="/inventory" {{if eq .Section "Inventory"}}aria-current="page"{{end}}>Inventory</a>
+        <a href="/orders" {{if eq .Section "Orders"}}aria-current="page"{{end}}>Orders</a>
+        <a href="/invoices" {{if eq .Section "Invoices"}}aria-current="page"{{end}}>Invoices</a>
+        <a href="/ledger" {{if eq .Section "Ledger"}}aria-current="page"{{end}}>Ledger</a>
+      </nav>
+      <div class="rail-foot">
+        <span>Local console</span>
+        <a href="/api/products">API</a>
+      </div>
+    </aside>
+    <main class="main" id="content">
+      <header class="topbar">
+        <div class="topbar-title">
+          <p class="crumb">Operations / {{.Section}}</p>
+          <h1>{{.Title}}</h1>
+        </div>
+        <div class="topbar-meta">
+          <span class="tenant">Tenant {{shortID .TenantID}}</span>
+          <span class="today">{{date .Today}}</span>
+        </div>
+      </header>
+      {{if .Flash}}<div class="flash" role="status">{{.Flash}}</div>{{end}}
+      {{if and .Error (not .IsError)}}<div class="flash flash-error" role="alert">{{.Error}}</div>{{end}}
+      {{template "content" .}}
+      <footer class="footer">
+        <span>Distro operations console</span>
+        <span>Single-tenant local access · No authentication</span>
+      </footer>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>{{end}}

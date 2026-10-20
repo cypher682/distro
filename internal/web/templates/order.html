@@ -1,0 +1,87 @@
+{{define "content"}}
+<div class="doc-head">
+  <div>
+    <p class="doc-kicker">Sales order</p>
+    <h2 class="doc-title">{{shortID .Order.ID}}</h2>
+    <p class="doc-sub">{{.RetailerName .Order.RetailerID}} · {{date .Order.CreatedAt}}</p>
+  </div>
+  <div class="doc-actions">
+    {{if eq .Order.Status "draft"}}
+    <form method="post" action="/orders/{{.Order.ID}}/reserve">
+      <button class="button" type="submit">Reserve stock</button>
+    </form>
+    {{else if eq .Order.Status "reserved"}}
+    <form method="post" action="/orders/{{.Order.ID}}/invoice" onsubmit="return confirm('Invoice this order? Stock, COGS, and revenue will be posted.')">
+      <button class="button" type="submit">Invoice order</button>
+    </form>
+    {{end}}
+    {{if or (eq .Order.Status "draft") (eq .Order.Status "reserved")}}
+    <form method="post" action="/orders/{{.Order.ID}}/cancel" onsubmit="return confirm('Cancel this order? Reservations will be released.')">
+      <button class="button button-danger button-quiet" type="submit">Cancel</button>
+    </form>
+    {{end}}
+  </div>
+</div>
+
+<div class="doc-meta">
+  <div><span>Status</span><strong>{{template "status" .Order.Status}}</strong></div>
+  <div><span>Order total</span><strong class="num">{{money .Order.TotalCents}}</strong></div>
+  <div><span>Retailer</span><strong>{{.RetailerName .Order.RetailerID}}</strong></div>
+  <div><span>Lines</span><strong>{{len .Order.Lines}}</strong></div>
+  {{if .Linked}}
+  <div><span>Invoice</span><strong><a class="doc-link" href="/invoices/{{.Linked.ID}}">{{shortID .Linked.ID}}</a></strong></div>
+  {{end}}
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Order lines</h2>
+      <p>Prices were captured when this order was created.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Product</th>
+          <th scope="col" class="num">Quantity</th>
+          <th scope="col" class="num">Unit price</th>
+          <th scope="col" class="num">Line total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Order.Lines}}
+        <tr>
+          <td><span class="strong">{{$.ProductName .ProductID}}</span><small>{{$.ProductSKU .ProductID}}</small></td>
+          <td class="num">{{.Quantity}} {{$.ProductUnit .ProductID}}</td>
+          <td class="num">{{money .UnitPriceCents}}</td>
+          <td class="num">{{money .LineTotalCents}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th scope="row" colspan="3">Order total</th>
+          <td class="num">{{money .Order.TotalCents}}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
+
+<section class="flow">
+  <div class="flow-step {{if eq .Order.Status "draft"}}current{{end}}">
+    <span>1</span>
+    <div><strong>Draft</strong><small>Prices captured</small></div>
+  </div>
+  <div class="flow-step {{if eq .Order.Status "reserved"}}current{{end}}">
+    <span>2</span>
+    <div><strong>Reserved</strong><small>Stock and credit checked</small></div>
+  </div>
+  <div class="flow-step {{if .Linked}}current{{end}}">
+    <span>3</span>
+    <div><strong>Invoiced</strong><small>Revenue and COGS posted</small></div>
+  </div>
+</section>
+{{end}}

@@ -16,5 +16,8 @@ All notable changes to this project are documented here. The format follows
   inventory valuation reconciliation.
 - Sales returns with invoice cost snapshots, restock or damage handling,
   receivable credits, and exact COGS reversal.
+- Server-rendered browser console for stock, orders, invoices, payments,
+  returns, and ledger reconciliation.
+- Read endpoints for warehouses, orders, invoice lists, and invoice detail.
 - PostgreSQL and in-memory stores, HTTP API, Docker Compose stack, and CI.
 - Architecture, operations, security, contribution, and ADR documentation.

@@ -195,6 +195,89 @@ func TestSalesReturnEndpointUpdatesBalance(t *testing.T) {
 	}
 }
 
+func TestReadEndpointsReturnRecords(t *testing.T) {
+	router := apiRouter()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(`{
+		"retailer_id": "`+apiRetailer+`",
+		"lines": [{"product_id": "`+apiProduct+`", "quantity": 2}]
+	}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, create)
+	var order core.Order
+	if err := json.NewDecoder(createRec.Body).Decode(&order); err != nil {
+		t.Fatalf("decode order: %v", err)
+	}
+
+	reserve := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/reserve", nil)
+	reserveRec := httptest.NewRecorder()
+	router.ServeHTTP(reserveRec, reserve)
+	if reserveRec.Code != http.StatusOK {
+		t.Fatalf("reserve: expected 200, got %d: %s", reserveRec.Code, reserveRec.Body.String())
+	}
+	invoiceRequest := httptest.NewRequest(http.MethodPost, "/api/orders/"+order.ID+"/invoice", nil)
+	invoiceRec := httptest.NewRecorder()
+	router.ServeHTTP(invoiceRec, invoiceRequest)
+	if invoiceRec.Code != http.StatusCreated {
+		t.Fatalf("invoice: expected 201, got %d: %s", invoiceRec.Code, invoiceRec.Body.String())
+	}
+	var invoice core.Invoice
+	if err := json.NewDecoder(invoiceRec.Body).Decode(&invoice); err != nil {
+		t.Fatalf("decode invoice: %v", err)
+	}
+
+	returnRequest := httptest.NewRequest(http.MethodPost, "/api/invoices/"+invoice.ID+"/returns", strings.NewReader(`{
+		"lines": [{"product_id": "`+apiProduct+`", "quantity": 1, "restock": false}]
+	}`))
+	returnRequest.Header.Set("Content-Type", "application/json")
+	returnRec := httptest.NewRecorder()
+	router.ServeHTTP(returnRec, returnRequest)
+	if returnRec.Code != http.StatusCreated {
+		t.Fatalf("return: expected 201, got %d: %s", returnRec.Code, returnRec.Body.String())
+	}
+
+	ordersRec := httptest.NewRecorder()
+	router.ServeHTTP(ordersRec, httptest.NewRequest(http.MethodGet, "/api/orders", nil))
+	var orders []core.Order
+	if err := json.NewDecoder(ordersRec.Body).Decode(&orders); err != nil {
+		t.Fatalf("decode orders: %v", err)
+	}
+	if len(orders) != 1 || len(orders[0].Lines) != 1 {
+		t.Fatalf("unexpected orders: %+v", orders)
+	}
+
+	invoicesRec := httptest.NewRecorder()
+	router.ServeHTTP(invoicesRec, httptest.NewRequest(http.MethodGet, "/api/invoices", nil))
+	var invoices []core.Invoice
+	if err := json.NewDecoder(invoicesRec.Body).Decode(&invoices); err != nil {
+		t.Fatalf("decode invoices: %v", err)
+	}
+	if len(invoices) != 1 || invoices[0].ReturnedCents != 1000 {
+		t.Fatalf("unexpected invoices: %+v", invoices)
+	}
+
+	detailRec := httptest.NewRecorder()
+	router.ServeHTTP(detailRec, httptest.NewRequest(http.MethodGet, "/api/invoices/"+invoice.ID, nil))
+	var detail core.InvoiceDetail
+	if err := json.NewDecoder(detailRec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode invoice detail: %v", err)
+	}
+	if len(detail.Lines) != 1 || len(detail.Returns) != 1 || detail.Returns[0].Lines[0].Restock {
+		t.Fatalf("unexpected detail: %+v", detail)
+	}
+
+	warehousesRec := httptest.NewRecorder()
+	router.ServeHTTP(warehousesRec, httptest.NewRequest(http.MethodGet, "/api/warehouses", nil))
+	var warehouses []core.Warehouse
+	if err := json.NewDecoder(warehousesRec.Body).Decode(&warehouses); err != nil {
+		t.Fatalf("decode warehouses: %v", err)
+	}
+	if len(warehouses) != 1 || warehouses[0].Name != "Main Warehouse" {
+		t.Fatalf("unexpected warehouses: %+v", warehouses)
+	}
+}
+
 func TestInventoryValuationEndpointReconciles(t *testing.T) {
 	router := apiRouter()
 

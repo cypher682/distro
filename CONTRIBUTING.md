@@ -10,8 +10,8 @@ docker compose up -d --build
 make test
 ```
 
-The API is available at http://localhost:8081. Reset local data with `make down`
-before recreating the stack.
+The API and browser console are available at http://localhost:8081. Reset local
+data with `make down` before recreating the stack.
 
 ## Workflow
 
@@ -26,7 +26,8 @@ development defaults only.
 
 ## Code conventions
 
-- Keep domain rules in `internal/core`; keep HTTP concerns in `internal/httpapi`.
+- Keep domain rules in `internal/core`; keep JSON API concerns in
+  `internal/httpapi` and console rendering in `internal/web`.
 - Use integer cents for money and costs. Never use floating point for money.
 - Return the `ErrInvalid`, `ErrConflict`, and `ErrNotFound` sentinels for domain
   errors so HTTP status mapping stays consistent.

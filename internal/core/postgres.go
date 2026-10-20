@@ -45,6 +45,29 @@ func (s *PostgresStore) ListProducts(ctx context.Context, tenantID string) ([]Pr
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) ListWarehouses(ctx context.Context, tenantID string) ([]Warehouse, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, name
+		FROM warehouses
+		WHERE tenant_id = $1::uuid
+		ORDER BY name
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Warehouse, 0)
+	for rows.Next() {
+		var warehouse Warehouse
+		if err := rows.Scan(&warehouse.ID, &warehouse.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, warehouse)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) ListRetailers(ctx context.Context, tenantID string) ([]Retailer, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, credit_limit_cents
@@ -280,6 +303,65 @@ func (s *PostgresStore) CreateOrder(ctx context.Context, tenantID, retailerID st
 		return Order{}, err
 	}
 	return order, nil
+}
+
+func (s *PostgresStore) ListOrders(ctx context.Context, tenantID string) ([]Order, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, retailer_id::text, status, total_cents, created_at
+		FROM orders
+		WHERE tenant_id = $1::uuid
+		ORDER BY created_at DESC, id DESC
+		LIMIT 100
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	orders := make([]Order, 0)
+	index := make(map[string]int)
+	for rows.Next() {
+		var order Order
+		if err := rows.Scan(&order.ID, &order.RetailerID, &order.Status, &order.TotalCents, &order.CreatedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		index[order.ID] = len(orders)
+		orders = append(orders, order)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(orders) == 0 {
+		return orders, nil
+	}
+
+	ids := make([]string, 0, len(orders))
+	for _, order := range orders {
+		ids = append(ids, order.ID)
+	}
+	lineRows, err := s.pool.Query(ctx, `
+		SELECT order_id::text, id::text, product_id::text, quantity, unit_price_cents
+		FROM order_lines
+		WHERE order_id::text = ANY($1::text[])
+		ORDER BY id
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer lineRows.Close()
+	for lineRows.Next() {
+		var orderID string
+		var line OrderLine
+		if err := lineRows.Scan(&orderID, &line.ID, &line.ProductID, &line.Quantity, &line.UnitPriceCents); err != nil {
+			return nil, err
+		}
+		line.LineTotalCents = int64(line.Quantity) * line.UnitPriceCents
+		i, ok := index[orderID]
+		if ok {
+			orders[i].Lines = append(orders[i].Lines, line)
+		}
+	}
+	return orders, lineRows.Err()
 }
 
 func (s *PostgresStore) GetOrder(ctx context.Context, tenantID, orderID string) (Order, error) {
@@ -697,6 +779,211 @@ func (s *PostgresStore) InvoiceOrder(ctx context.Context, tenantID, orderID stri
 		return Invoice{}, err
 	}
 	return invoice, nil
+}
+
+func (s *PostgresStore) ListInvoices(ctx context.Context, tenantID string) ([]Invoice, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT i.id::text,
+		       i.order_id::text,
+		       i.retailer_id::text,
+		       i.status,
+		       i.total_cents,
+		       i.paid_cents,
+		       COALESCE((
+		           SELECT SUM(sr.total_refund_cents)
+		           FROM sales_returns sr
+		           WHERE sr.tenant_id = i.tenant_id AND sr.invoice_id = i.id
+		       ), 0)::bigint,
+		       i.created_at
+		FROM invoices i
+		WHERE i.tenant_id = $1::uuid
+		ORDER BY i.created_at DESC, i.id DESC
+		LIMIT 100
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Invoice, 0)
+	for rows.Next() {
+		var invoice Invoice
+		if err := rows.Scan(
+			&invoice.ID,
+			&invoice.OrderID,
+			&invoice.RetailerID,
+			&invoice.Status,
+			&invoice.TotalCents,
+			&invoice.PaidCents,
+			&invoice.ReturnedCents,
+			&invoice.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, invoice)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetInvoice(ctx context.Context, tenantID, invoiceID string) (InvoiceDetail, error) {
+	var detail InvoiceDetail
+	if err := s.pool.QueryRow(ctx, `
+		SELECT i.id::text,
+		       i.order_id::text,
+		       i.retailer_id::text,
+		       i.status,
+		       i.total_cents,
+		       i.paid_cents,
+		       COALESCE((
+		           SELECT SUM(sr.total_refund_cents)
+		           FROM sales_returns sr
+		           WHERE sr.tenant_id = i.tenant_id AND sr.invoice_id = i.id
+		       ), 0)::bigint,
+		       i.created_at
+		FROM invoices i
+		WHERE i.tenant_id = $1::uuid AND i.id = $2::uuid
+	`, tenantID, invoiceID).Scan(
+		&detail.ID,
+		&detail.OrderID,
+		&detail.RetailerID,
+		&detail.Status,
+		&detail.TotalCents,
+		&detail.PaidCents,
+		&detail.ReturnedCents,
+		&detail.CreatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InvoiceDetail{}, fmt.Errorf("%w: invoice %s", ErrNotFound, invoiceID)
+		}
+		return InvoiceDetail{}, err
+	}
+
+	lineRows, err := s.pool.Query(ctx, `
+		SELECT id::text, invoice_id::text, product_id::text, warehouse_id::text,
+		       quantity, unit_price_cents, line_total_cents, total_cost_cents
+		FROM invoice_lines
+		WHERE tenant_id = $1::uuid AND invoice_id = $2::uuid
+		ORDER BY product_id
+	`, tenantID, invoiceID)
+	if err != nil {
+		return InvoiceDetail{}, err
+	}
+	for lineRows.Next() {
+		var line InvoiceLine
+		if err := lineRows.Scan(
+			&line.ID,
+			&line.InvoiceID,
+			&line.ProductID,
+			&line.WarehouseID,
+			&line.Quantity,
+			&line.UnitPriceCents,
+			&line.LineTotalCents,
+			&line.TotalCostCents,
+		); err != nil {
+			lineRows.Close()
+			return InvoiceDetail{}, err
+		}
+		detail.Lines = append(detail.Lines, line)
+	}
+	lineRows.Close()
+	if err := lineRows.Err(); err != nil {
+		return InvoiceDetail{}, err
+	}
+
+	returnRows, err := s.pool.Query(ctx, `
+		SELECT id::text, retailer_id::text, total_refund_cents, total_cost_cents, created_at
+		FROM sales_returns
+		WHERE tenant_id = $1::uuid AND invoice_id = $2::uuid
+		ORDER BY created_at DESC, id DESC
+	`, tenantID, invoiceID)
+	if err != nil {
+		return InvoiceDetail{}, err
+	}
+	for returnRows.Next() {
+		var salesReturn SalesReturn
+		salesReturn.InvoiceID = invoiceID
+		if err := returnRows.Scan(
+			&salesReturn.ID,
+			&salesReturn.RetailerID,
+			&salesReturn.TotalRefundCents,
+			&salesReturn.TotalCostCents,
+			&salesReturn.CreatedAt,
+		); err != nil {
+			returnRows.Close()
+			return InvoiceDetail{}, err
+		}
+		detail.Returns = append(detail.Returns, salesReturn)
+	}
+	returnRows.Close()
+	if err := returnRows.Err(); err != nil {
+		return InvoiceDetail{}, err
+	}
+
+	if len(detail.Returns) > 0 {
+		returnIDs := make([]string, 0, len(detail.Returns))
+		returnIndex := make(map[string]int, len(detail.Returns))
+		for i, salesReturn := range detail.Returns {
+			returnIDs = append(returnIDs, salesReturn.ID)
+			returnIndex[salesReturn.ID] = i
+		}
+		returnLineRows, err := s.pool.Query(ctx, `
+			SELECT id::text, sales_return_id::text, invoice_line_id::text, product_id::text,
+			       quantity, refund_cents, cost_cents, restock
+			FROM sales_return_lines
+			WHERE tenant_id = $1::uuid AND sales_return_id::text = ANY($2::text[])
+			ORDER BY id
+		`, tenantID, returnIDs)
+		if err != nil {
+			return InvoiceDetail{}, err
+		}
+		for returnLineRows.Next() {
+			var line SalesReturnLine
+			if err := returnLineRows.Scan(
+				&line.ID,
+				&line.SalesReturnID,
+				&line.InvoiceLineID,
+				&line.ProductID,
+				&line.Quantity,
+				&line.RefundCents,
+				&line.CostCents,
+				&line.Restock,
+			); err != nil {
+				returnLineRows.Close()
+				return InvoiceDetail{}, err
+			}
+			if i, ok := returnIndex[line.SalesReturnID]; ok {
+				detail.Returns[i].Lines = append(detail.Returns[i].Lines, line)
+			}
+		}
+		returnLineRows.Close()
+		if err := returnLineRows.Err(); err != nil {
+			return InvoiceDetail{}, err
+		}
+	}
+
+	paymentRows, err := s.pool.Query(ctx, `
+		SELECT id::text, invoice_id::text, amount_cents, created_at
+		FROM payments
+		WHERE tenant_id = $1::uuid AND invoice_id = $2::uuid
+		ORDER BY created_at DESC, id DESC
+	`, tenantID, invoiceID)
+	if err != nil {
+		return InvoiceDetail{}, err
+	}
+	for paymentRows.Next() {
+		var payment Payment
+		if err := paymentRows.Scan(&payment.ID, &payment.InvoiceID, &payment.AmountCents, &payment.CreatedAt); err != nil {
+			paymentRows.Close()
+			return InvoiceDetail{}, err
+		}
+		detail.Payments = append(detail.Payments, payment)
+	}
+	paymentRows.Close()
+	if err := paymentRows.Err(); err != nil {
+		return InvoiceDetail{}, err
+	}
+
+	return detail, nil
 }
 
 func (s *PostgresStore) GetCredit(ctx context.Context, tenantID, retailerID string) (CreditView, error) {

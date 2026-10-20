@@ -15,6 +15,7 @@ import (
 	"github.com/cypher682/distro/internal/config"
 	"github.com/cypher682/distro/internal/core"
 	"github.com/cypher682/distro/internal/httpapi"
+	"github.com/cypher682/distro/internal/web"
 )
 
 func main() {
@@ -39,9 +40,16 @@ func main() {
 	store := core.NewPostgresStore(pool)
 	service := core.NewService(store)
 
+	api := httpapi.NewRouter(pool, service)
+	root := http.NewServeMux()
+	root.Handle("/api/", api)
+	root.Handle("/health", api)
+	root.Handle("/health/db", api)
+	root.Handle("/", web.New(service, httpapi.DefaultTenantID))
+
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(pool, service),
+		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -10,11 +10,12 @@ MVP scaffold for the distributor and wholesale commerce platform.
 - weighted-average inventory costing and cost of goods sold
 - sales returns with restock or damage handling
 - invoice and double-entry ledger posting
+- server-rendered browser console for stock, orders, invoices, returns, and ledger
 - JSON API for ordering and operations stock flows
 
 Deferred: procurement, picking and dispatch, routing, driver app, WhatsApp
-intake, offline rep sync, aging and dunning, analytics, public API, and
-webhooks.
+intake, offline rep sync, aging and dunning, analytics, public API, webhooks,
+and native desktop or mobile clients.
 
 ## Run
 
@@ -22,7 +23,11 @@ webhooks.
 docker compose up --build
 ```
 
-API: http://localhost:8081
+API and console: http://localhost:8081
+
+The browser console is a single-tenant local operations view. It has no
+authentication and trusts the seeded demo tenant; do not expose it to an
+untrusted network.
 
 Health checks:
 
@@ -37,6 +42,10 @@ migration runner yet, so existing local volumes must be reset after a schema
 change.
 
 ## Demo flow
+
+Open http://localhost:8081/ to receive stock, create and reserve orders, issue
+invoices, record payments, and post returns in the console. The same flow is
+available over the API:
 
 ```bash
 # Catalog and stock
@@ -80,16 +89,20 @@ response reconciles on-hand stock value, the inventory account, and posted COGS.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/products` | List catalog products |
+| GET | `/api/warehouses` | List stock locations |
 | GET | `/api/retailers` | List retailers and credit limits |
 | GET | `/api/stock` | On-hand, reserved, available, and valued stock |
 | GET | `/api/inventory/valuation` | Inventory value, COGS, and ledger reconciliation |
 | POST | `/api/stock/receive` | Receive stock with unit cost or apply a stock adjustment |
 | POST | `/api/orders` | Create a draft order |
+| GET | `/api/orders` | List the latest 100 orders with lines |
 | GET | `/api/orders/{id}` | Read an order |
 | POST | `/api/orders/{id}/reserve` | Reserve stock and check credit |
 | POST | `/api/orders/{id}/cancel` | Cancel a draft or reserved order |
 | POST | `/api/orders/{id}/invoice` | Invoice a reserved order and post the ledger |
 | GET | `/api/retailers/{id}/credit` | Credit limit, exposure, and availability |
+| GET | `/api/invoices` | List the latest 100 invoices with returned totals |
+| GET | `/api/invoices/{id}` | Read an invoice with lines, returns, and payments |
 | POST | `/api/invoices/{id}/payments` | Record a payment |
 | POST | `/api/invoices/{id}/returns` | Return invoiced goods and post the credit |
 | GET | `/api/ledger/trial-balance` | Account balances and balance check |
@@ -152,7 +165,8 @@ make down
 cmd/api/                HTTP entry point
 internal/config/        environment configuration
 internal/core/          domain types, service, memory and PostgreSQL stores
-internal/httpapi/       router, handlers, health checks
+internal/httpapi/       JSON API router, handlers, health checks
+internal/web/           server-rendered console, templates, and static assets
 db/migrations/          schema migrations
 db/seed.sql             synthetic demo data
 db/demo-order.json      sample order request for concurrency checks
@@ -171,4 +185,7 @@ docs/adr/               decisions
   orders. A paid invoice can therefore carry a customer credit balance.
 - No tax yet.
 - No authentication or database RLS yet; tenant isolation is enforced by query
-  filters and the `X-Tenant-ID` header.
+  filters and the `X-Tenant-ID` header. The console is fixed to the default
+  tenant and has no tenant switcher.
+- Order and invoice lists are capped at the latest 100 records. Pagination is
+  deferred.

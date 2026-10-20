@@ -21,6 +21,13 @@ func (s *Service) ListProducts(ctx context.Context, tenantID string) ([]Product,
 	return s.store.ListProducts(ctx, tenantID)
 }
 
+func (s *Service) ListWarehouses(ctx context.Context, tenantID string) ([]Warehouse, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.ListWarehouses(ctx, tenantID)
+}
+
 func (s *Service) ListRetailers(ctx context.Context, tenantID string) ([]Retailer, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return nil, err
@@ -88,6 +95,13 @@ func (s *Service) CreateOrder(ctx context.Context, tenantID, retailerID string, 
 	return s.store.CreateOrder(ctx, tenantID, retailerID, clean)
 }
 
+func (s *Service) ListOrders(ctx context.Context, tenantID string) ([]Order, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.ListOrders(ctx, tenantID)
+}
+
 func (s *Service) GetOrder(ctx context.Context, tenantID, orderID string) (Order, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return Order{}, err
@@ -126,6 +140,23 @@ func (s *Service) InvoiceOrder(ctx context.Context, tenantID, orderID string) (I
 		return Invoice{}, fmt.Errorf("%w: order_id is required", ErrInvalid)
 	}
 	return s.store.InvoiceOrder(ctx, tenantID, orderID)
+}
+
+func (s *Service) ListInvoices(ctx context.Context, tenantID string) ([]Invoice, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.ListInvoices(ctx, tenantID)
+}
+
+func (s *Service) GetInvoice(ctx context.Context, tenantID, invoiceID string) (InvoiceDetail, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return InvoiceDetail{}, err
+	}
+	if invoiceID == "" {
+		return InvoiceDetail{}, fmt.Errorf("%w: invoice_id is required", ErrInvalid)
+	}
+	return s.store.GetInvoice(ctx, tenantID, invoiceID)
 }
 
 func (s *Service) GetCredit(ctx context.Context, tenantID, retailerID string) (CreditView, error) {

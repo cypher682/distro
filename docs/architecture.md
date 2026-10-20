@@ -6,20 +6,26 @@ order-to-cash and inventory-accounting flow for a wholesale distributor.
 ## Runtime
 
 ```text
-HTTP client
+Browser / HTTP client
     |
     v
-cmd/api -> internal/httpapi -> internal/core -> Store
-                                               |-- MemoryStore (tests)
-                                               `-- PostgresStore
-                                                        |
-                                                        v
-                                                   PostgreSQL
+cmd/api
+  |-- /api/ and /health* -> internal/httpapi --+
+  `-- /                  -> internal/web -----+-> internal/core -> Store
+                                                                     |-- MemoryStore (tests)
+                                                                     `-- PostgresStore
+                                                                              |
+                                                                              v
+                                                                         PostgreSQL
 ```
 
-- `cmd/api` loads configuration, opens the PostgreSQL pool, and serves HTTP.
-- `internal/httpapi` owns routing, JSON encoding, tenant header parsing, and
-  HTTP status mapping.
+- `cmd/api` loads configuration, opens the PostgreSQL pool, and mounts both
+  handlers on one HTTP server. `/api/` and `/health*` go to the JSON API;
+  everything else goes to the console.
+- `internal/httpapi` owns API routing, JSON encoding, tenant header parsing,
+  and HTTP status mapping.
+- `internal/web` owns the server-rendered browser console. Templates and static
+  assets are embedded in the binary; there is no Node build.
 - `internal/core` owns domain rules, validation, and the `Store` contract.
 - `PostgresStore` implements the contract in transactions. `MemoryStore` is the
   fast unit-test implementation.
@@ -70,7 +76,30 @@ mutable on-hand column.
 
 See [ADR-0002](adr/0002-core-money-and-stock.md),
 [ADR-0003](adr/0003-inventory-costing.md), and
-[ADR-0004](adr/0004-sales-returns.md) for the accounting decisions.
+[ADR-0004](adr/0004-sales-returns.md) for the accounting decisions. See
+[ADR-0005](adr/0005-server-rendered-console.md) for the console architecture.
+
+## Browser console
+
+`internal/web` is a server-rendered HTML console mounted at `/`:
+
+| Route | Purpose |
+|---|---|
+| `GET /` | Stock, receivables, ledger, and recent invoice overview |
+| `GET /inventory` | Stock levels, valuation, and receive/adjust form |
+| `POST /inventory/receive` | Post a receipt or negative adjustment |
+| `GET /orders`, `POST /orders` | Order register and draft creation |
+| `GET /orders/{id}` | Order detail with reserve, cancel, and invoice actions |
+| `GET /invoices` | Receivables list |
+| `GET /invoices/{id}` | Invoice lines, payment form, return form, and histories |
+| `POST /invoices/{id}/payments` | Record a payment |
+| `POST /invoices/{id}/returns` | Post a return |
+| `GET /ledger` | Trial balance, inventory reconciliation, and credit watch |
+
+The console uses the default tenant, calls the same service layer as the API,
+and renders with `html/template`. Mutations use POST and redirect back to a GET
+page with a flash or error message. A small static script adds or removes order
+lines; the core flows work without JavaScript.
 
 ## Order flow
 
@@ -96,13 +125,14 @@ logged and returned as `500` without internal details.
 ## Security boundaries
 
 There is no authentication or database row-level security in this MVP. The
-`X-Tenant-ID` header is trusted and is only suitable for local development or a
-trusted network. Do not expose the API to untrusted clients. See
-[SECURITY.md](../SECURITY.md).
+`X-Tenant-ID` header is trusted and the console is pinned to the default tenant.
+This is only suitable for local development or a trusted network. Do not expose
+the API or console to untrusted clients. See [SECURITY.md](../SECURITY.md).
 
 ## Deferred
 
 Procurement, picking and dispatch, multi-warehouse allocation, lots/FIFO, tax,
 period close, cash refunds and exchanges, aging and dunning, public API
-credentials, webhooks, and a web UI are outside this slice. The modular package boundaries leave room to add them
-without splitting the service prematurely.
+credentials, webhooks, authentication, tenant switching, and desktop or mobile
+clients are outside this slice. The modular package boundaries leave room to add
+them without splitting the service prematurely.

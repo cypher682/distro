@@ -1,0 +1,106 @@
+{{define "content"}}
+<section class="metrics" aria-label="Ledger figures">
+  <div class="metric">
+    <span class="metric-label">Total debits</span>
+    <span class="metric-value">{{money .DebitCents}}</span>
+    <span class="metric-note">All posted entries</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Total credits</span>
+    <span class="metric-value">{{money .CreditCents}}</span>
+    <span class="metric-note">All posted entries</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Inventory ledger</span>
+    <span class="metric-value">{{money .Valuation.LedgerInventoryCents}}</span>
+    <span class="metric-note">Inventory account balance</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">COGS</span>
+    <span class="metric-value">{{money .Valuation.CogsCents}}</span>
+    <span class="metric-note">Cost of goods sold</span>
+  </div>
+</section>
+
+<div class="grid grid-2">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Trial balance</h2>
+        <p>Debits and credits by account.</p>
+      </div>
+      {{if .Balanced}}<span class="tag tag-good">Balanced</span>{{else}}<span class="tag tag-alert">Out of balance</span>{{end}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Account</th>
+            <th scope="col" class="num">Debit</th>
+            <th scope="col" class="num">Credit</th>
+            <th scope="col" class="num">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Accounts}}
+          <tr>
+            <td class="strong">{{label .Account}}</td>
+            <td class="num">{{money .DebitCents}}</td>
+            <td class="num">{{money .CreditCents}}</td>
+            <td class="num">{{money .BalanceCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row">Total</th>
+            <td class="num">{{money .DebitCents}}</td>
+            <td class="num">{{money .CreditCents}}</td>
+            <td class="num">{{money (sub .DebitCents .CreditCents)}}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Inventory reconciliation</h2>
+        <p>Stock movement value must equal the inventory account.</p>
+      </div>
+      {{if .Valuation.Balanced}}<span class="tag tag-good">Reconciled</span>{{else}}<span class="tag tag-alert">Unbalanced</span>{{end}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Product</th>
+            <th scope="col" class="num">On hand</th>
+            <th scope="col" class="num">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Valuation.Items}}
+          <tr>
+            <td><span class="strong">{{$.ProductName .ProductID}}</span><small>{{$.WarehouseName .WarehouseID}}</small></td>
+            <td class="num">{{.OnHand}}</td>
+            <td class="num">{{money .InventoryValueCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row" colspan="2">Stock movement value</th>
+            <td class="num">{{money .Valuation.TotalValueCents}}</td>
+          </tr>
+          <tr>
+            <th scope="row" colspan="2">Inventory ledger</th>
+            <td class="num">{{money .Valuation.LedgerInventoryCents}}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+</div>
+{{end}}

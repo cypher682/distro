@@ -21,14 +21,17 @@ The current slice is designed for local development and trusted environments.
 - There is no authentication or authorization.
 - `X-Tenant-ID` is trusted and can be supplied by any client. It is not a
   security boundary.
+- The browser console is pinned to the default tenant and has no login.
 - PostgreSQL has no row-level security. Tenant isolation relies on query filters.
-- The API has no rate limiting, CSRF protection, or public TLS termination.
+- The API and console have no rate limiting, CSRF protection, or public TLS
+  termination.
 - Compose credentials are development defaults and must not be reused.
 - Financial behavior is covered by tests but has not been independently audited.
 
-Do not expose this API to untrusted clients. Before a shared deployment, add
-authenticated tenant context, database RLS, TLS, rate limiting, secret
-management, audit logging, and a security review of the ledger and stock paths.
+Do not expose the API or console to untrusted clients. Before a shared
+deployment, add authenticated tenant context, database RLS, TLS, rate limiting,
+secret management, audit logging, and a security review of the ledger and stock
+paths.
 
 ## Secret handling
 

@@ -14,7 +14,8 @@ docker compose up --build
 
 | Service | Address |
 |---|---|
-| API | http://localhost:8081 |
+| API | http://localhost:8081/api/ |
+| Browser console | http://localhost:8081/ |
 | PostgreSQL | localhost:5434 |
 
 The Compose credentials are development-only values. They are not suitable for a
@@ -64,6 +65,19 @@ make seed
 The seed uses fixed IDs and is not idempotent; a second run conflicts on
 existing rows. Reset first when a clean state is required.
 
+## Browser console
+
+Open http://localhost:8081/ after the stack is healthy. The console is pinned to
+the seeded demo tenant and has no authentication. Use it to:
+
+- receive stock or post a negative adjustment;
+- create a draft order, reserve it, cancel it, or issue an invoice;
+- record a payment or return goods with or without restocking;
+- verify the trial balance and inventory valuation on the ledger page.
+
+Mutations redirect back to the page with a flash or error message. The console
+renders on the server; only the add/remove order-line control needs JavaScript.
+
 ## Verification
 
 ```bash
@@ -89,7 +103,12 @@ Both responses must contain `"balanced": true`. On a clean seed, inventory value
 is `2100000` cents. After an invoice, restocked return, and payment, the trial
 balance must still reconcile and inventory must equal the ledger balance.
 
-To verify a return manually, invoice a reserved order, then:
+To verify the console manually, open `/`, create and reserve an order, invoice
+it, record a partial payment, then return one unit from the invoice page. The
+invoice total, returned amount, payment history, and ledger must all update, and
+both reconciliation endpoints must stay balanced.
+
+To verify a return over the API, invoice a reserved order, then:
 
 ```bash
 curl -s -X POST http://localhost:8081/api/invoices/$INVOICE_ID/returns \
@@ -103,10 +122,11 @@ unchanged. Credit exposure drops by the refund.
 
 ## Deployment notes
 
-- Run the API as a single process behind a TLS-terminating proxy.
+- Run the API and console as a single process behind a TLS-terminating proxy.
 - Use a managed PostgreSQL instance with backups and point-in-time recovery.
 - Replace all development credentials through environment variables.
-- Do not expose the API without authentication, RLS, and rate limiting.
+- Do not expose the API or console without authentication, RLS, and rate
+  limiting.
 - The schema currently depends on first-start initialization. Add a migration
   tool before operating multiple environments.
 

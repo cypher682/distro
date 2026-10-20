@@ -1,0 +1,66 @@
+{{define "content"}}
+<section class="metrics" aria-label="Invoice figures">
+  <div class="metric">
+    <span class="metric-label">Open receivable</span>
+    <span class="metric-value">{{money .OpenCents}}</span>
+    <span class="metric-note">Latest 100 invoices after credits</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Returns credited</span>
+    <span class="metric-value">{{money .Returned}}</span>
+    <span class="metric-note">Latest 100 invoices</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Invoices</span>
+    <span class="metric-value">{{len .Invoices}}</span>
+    <span class="metric-note">Most recent 100</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Paid invoices</span>
+    <span class="metric-value">{{.PaidInvoices}}</span>
+    <span class="metric-note">Within latest 100</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Receivables</h2>
+      <p>Open invoices, payments, and sales returns.</p>
+    </div>
+    <a class="button button-secondary button-small" href="/orders">Create from an order</a>
+  </div>
+  {{if .Invoices}}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Invoice</th>
+          <th scope="col">Retailer</th>
+          <th scope="col">Status</th>
+          <th scope="col" class="num">Total</th>
+          <th scope="col" class="num">Paid</th>
+          <th scope="col" class="num">Returned</th>
+          <th scope="col" class="num">Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Invoices}}
+        <tr>
+          <td><a class="doc-link" href="/invoices/{{.ID}}">{{shortID .ID}}</a><small>{{date .CreatedAt}}</small></td>
+          <td>{{$.RetailerName .RetailerID}}</td>
+          <td>{{template "status" .Status}}</td>
+          <td class="num">{{money .TotalCents}}</td>
+          <td class="num">{{money .PaidCents}}</td>
+          <td class="num">{{if gt .ReturnedCents 0}}{{money .ReturnedCents}}{{else}}—{{end}}</td>
+          <td class="num">{{money ($.InvoiceBalance .)}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty">No invoices yet. Reserve and invoice an order to create one.</div>
+  {{end}}
+</section>
+{{end}}

@@ -10,7 +10,8 @@ import (
 	"github.com/cypher682/distro/internal/core"
 )
 
-const defaultTenantID = "00000000-0000-0000-0000-000000000001"
+// DefaultTenantID is the seeded demo tenant used when no header is supplied.
+const DefaultTenantID = "00000000-0000-0000-0000-000000000001"
 
 type Pinger interface {
 	Ping(context.Context) error
@@ -84,6 +85,15 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 		writeJSON(w, http.StatusOK, products)
 	})
 
+	mux.HandleFunc("GET /api/warehouses", func(w http.ResponseWriter, r *http.Request) {
+		warehouses, err := svc.ListWarehouses(r.Context(), tenantID(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, warehouses)
+	})
+
 	mux.HandleFunc("GET /api/retailers", func(w http.ResponseWriter, r *http.Request) {
 		retailers, err := svc.ListRetailers(r.Context(), tenantID(r))
 		if err != nil {
@@ -138,6 +148,15 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 		writeJSON(w, http.StatusCreated, order)
 	})
 
+	mux.HandleFunc("GET /api/orders", func(w http.ResponseWriter, r *http.Request) {
+		orders, err := svc.ListOrders(r.Context(), tenantID(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, orders)
+	})
+
 	mux.HandleFunc("GET /api/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
 		order, err := svc.GetOrder(r.Context(), tenantID(r), r.PathValue("id"))
 		if err != nil {
@@ -181,6 +200,24 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, credit)
+	})
+
+	mux.HandleFunc("GET /api/invoices", func(w http.ResponseWriter, r *http.Request) {
+		invoices, err := svc.ListInvoices(r.Context(), tenantID(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, invoices)
+	})
+
+	mux.HandleFunc("GET /api/invoices/{id}", func(w http.ResponseWriter, r *http.Request) {
+		invoice, err := svc.GetInvoice(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, invoice)
 	})
 
 	mux.HandleFunc("POST /api/invoices/{id}/payments", func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +283,7 @@ func tenantID(r *http.Request) string {
 	if value := r.Header.Get("X-Tenant-ID"); value != "" {
 		return value
 	}
-	return defaultTenantID
+	return DefaultTenantID
 }
 
 func decodeJSON(r *http.Request, destination any) error {

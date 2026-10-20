@@ -1,0 +1,111 @@
+{{define "content"}}
+<section class="metrics" aria-label="Inventory figures">
+  <div class="metric">
+    <span class="metric-label">Units on hand</span>
+    <span class="metric-value">{{.TotalOnHand}}</span>
+    <span class="metric-note">Across all warehouses</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Reserved</span>
+    <span class="metric-value">{{.TotalReserved}}</span>
+    <span class="metric-note">Active order allocations</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Available</span>
+    <span class="metric-value">{{.TotalAvailable}}</span>
+    <span class="metric-note">On hand minus reserved</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Inventory value</span>
+    <span class="metric-value">{{money .Valuation.TotalValueCents}}</span>
+    <span class="metric-note">At weighted average cost</span>
+  </div>
+</section>
+
+<div class="grid grid-main-side">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Stock ledger</h2>
+        <p>Every quantity is derived from posted stock movements.</p>
+      </div>
+      {{if .Valuation.Balanced}}<span class="tag tag-good">Reconciled</span>{{else}}<span class="tag tag-alert">Unbalanced</span>{{end}}
+    </div>
+    {{if .Stock}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Product</th>
+            <th scope="col">Warehouse</th>
+            <th scope="col" class="num">On hand</th>
+            <th scope="col" class="num">Reserved</th>
+            <th scope="col" class="num">Available</th>
+            <th scope="col" class="num">Avg cost</th>
+            <th scope="col" class="num">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Stock}}
+          <tr>
+            <td><span class="strong">{{$.ProductName .ProductID}}</span><small>{{$.ProductSKU .ProductID}}</small></td>
+            <td>{{$.WarehouseName .WarehouseID}}</td>
+            <td class="num">{{.OnHand}}</td>
+            <td class="num">{{.Reserved}}</td>
+            <td class="num">{{if le .Available 10}}<span class="tag tag-warn">Low</span> {{end}}{{.Available}}</td>
+            <td class="num">{{money .AverageCostCents}}</td>
+            <td class="num">{{money .InventoryValueCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No stock positions yet. Receive stock to create the first movement.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel panel-sticky">
+    <div class="panel-head">
+      <div>
+        <h2>Post stock movement</h2>
+        <p>Positive receives stock. Negative adjusts stock out.</p>
+      </div>
+    </div>
+    <form class="form" method="post" action="/inventory/receive">
+      <label>
+        <span>Product</span>
+        <select name="product_id" required>
+          {{range .Products}}
+          <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+          {{end}}
+        </select>
+      </label>
+      <label>
+        <span>Warehouse</span>
+        <select name="warehouse_id" required>
+          {{range .Warehouses}}
+          <option value="{{.ID}}">{{.Name}}</option>
+          {{end}}
+        </select>
+      </label>
+      <div class="form-row">
+        <label>
+          <span>Quantity</span>
+          <input name="quantity" type="number" step="1" value="1" required>
+        </label>
+        <label>
+          <span>Unit cost</span>
+          <input name="unit_cost" type="text" inputmode="decimal" placeholder="0.00">
+        </label>
+      </div>
+      <label>
+        <span>Reason</span>
+        <input name="reason" type="text" placeholder="Supplier receipt" maxlength="120">
+      </label>
+      <p class="hint">Unit cost is required for receipts. For an adjustment, enter a negative quantity and leave the cost empty.</p>
+      <button class="button" type="submit">Post movement</button>
+    </form>
+  </aside>
+</div>
+{{end}}

@@ -1,0 +1,101 @@
+{{define "content"}}
+<div class="grid grid-main-side">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Order register</h2>
+        <p>Draft, reserved, and invoiced sales orders.</p>
+      </div>
+      <span class="count">{{len .Orders}} shown</span>
+    </div>
+    {{if .Orders}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Order</th>
+            <th scope="col">Retailer</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Total</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Orders}}
+          <tr>
+            <td><a class="doc-link" href="/orders/{{.ID}}">{{shortID .ID}}</a><small>{{date .CreatedAt}}</small></td>
+            <td>{{$.RetailerName .RetailerID}}</td>
+            <td>{{template "status" .Status}}</td>
+            <td class="num">{{money .TotalCents}}</td>
+            <td class="actions">
+              {{$invoice := $.InvoiceForOrder .ID}}
+              {{if $invoice}}
+              <a class="button button-small button-quiet" href="/invoices/{{$invoice.ID}}">Invoice</a>
+              {{else if eq .Status "draft"}}
+              <form method="post" action="/orders/{{.ID}}/reserve">
+                <button class="button button-small" type="submit">Reserve</button>
+              </form>
+              {{else if eq .Status "reserved"}}
+              <form method="post" action="/orders/{{.ID}}/invoice" onsubmit="return confirm('Invoice this order? Stock, COGS, and revenue will be posted.')">
+                <button class="button button-small" type="submit">Invoice</button>
+              </form>
+              {{end}}
+              <a class="button button-small button-quiet" href="/orders/{{.ID}}">Open</a>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No orders yet. Create a draft to start the order flow.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel panel-sticky">
+    <div class="panel-head">
+      <div>
+        <h2>New order</h2>
+        <p>Prices are snapshotted when the draft is created.</p>
+      </div>
+    </div>
+    <form class="form" method="post" action="/orders">
+      <label>
+        <span>Retailer</span>
+        <select name="retailer_id" required>
+          {{range .Retailers}}
+          <option value="{{.ID}}">{{.Name}} · {{money .CreditLimitCents}} limit</option>
+          {{end}}
+        </select>
+      </label>
+      <div class="field-label">Lines</div>
+      <div class="line-rows" id="order-lines">
+        <div class="line-row">
+          <select name="product_id" aria-label="Product">
+            {{range .Products}}
+            <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+            {{end}}
+          </select>
+          <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
+          <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+        </div>
+      </div>
+      <template id="line-template">
+        <div class="line-row">
+          <select name="product_id" aria-label="Product">
+            {{range .Products}}
+            <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+            {{end}}
+          </select>
+          <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
+          <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+        </div>
+      </template>
+      <div class="form-actions">
+        <button class="button button-secondary" type="button" data-add-line>Add line</button>
+        <button class="button" type="submit">Create draft</button>
+      </div>
+    </form>
+  </aside>
+</div>
+{{end}}

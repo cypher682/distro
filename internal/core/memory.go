@@ -108,6 +108,18 @@ func (m *MemoryStore) ListProducts(_ context.Context, tenantID string) ([]Produc
 	return out, nil
 }
 
+func (m *MemoryStore) ListWarehouses(_ context.Context, tenantID string) ([]Warehouse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]Warehouse, 0, len(m.warehouses[tenantID]))
+	for id, name := range m.warehouses[tenantID] {
+		out = append(out, Warehouse{ID: id, Name: name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 func (m *MemoryStore) ListRetailers(_ context.Context, tenantID string) ([]Retailer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -230,6 +242,23 @@ func (m *MemoryStore) CreateOrder(_ context.Context, tenantID, retailerID string
 
 	m.tenantOrders(tenantID)[order.ID] = &order
 	return cloneOrder(order), nil
+}
+
+func (m *MemoryStore) ListOrders(_ context.Context, tenantID string) ([]Order, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]Order, 0, len(m.orders[tenantID]))
+	for _, order := range m.orders[tenantID] {
+		out = append(out, cloneOrder(*order))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
 }
 
 func (m *MemoryStore) GetOrder(_ context.Context, tenantID, orderID string) (Order, error) {
@@ -407,6 +436,57 @@ func (m *MemoryStore) InvoiceOrder(_ context.Context, tenantID, orderID string) 
 		)
 	}
 	return invoice, nil
+}
+
+func (m *MemoryStore) ListInvoices(_ context.Context, tenantID string) ([]Invoice, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]Invoice, 0, len(m.invoices[tenantID]))
+	for _, invoice := range m.invoices[tenantID] {
+		out = append(out, cloneInvoice(*invoice))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (m *MemoryStore) GetInvoice(_ context.Context, tenantID, invoiceID string) (InvoiceDetail, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	invoice, ok := m.invoices[tenantID][invoiceID]
+	if !ok {
+		return InvoiceDetail{}, fmt.Errorf("%w: invoice %s", ErrNotFound, invoiceID)
+	}
+	detail := InvoiceDetail{Invoice: cloneInvoice(*invoice)}
+	for _, salesReturn := range m.returns[tenantID] {
+		if salesReturn.InvoiceID == invoiceID {
+			detail.Returns = append(detail.Returns, cloneSalesReturn(*salesReturn))
+		}
+	}
+	sort.Slice(detail.Returns, func(i, j int) bool {
+		if detail.Returns[i].CreatedAt.Equal(detail.Returns[j].CreatedAt) {
+			return detail.Returns[i].ID > detail.Returns[j].ID
+		}
+		return detail.Returns[i].CreatedAt.After(detail.Returns[j].CreatedAt)
+	})
+	for _, payment := range m.payments[tenantID] {
+		if payment.InvoiceID == invoiceID {
+			detail.Payments = append(detail.Payments, *payment)
+		}
+	}
+	sort.Slice(detail.Payments, func(i, j int) bool {
+		if detail.Payments[i].CreatedAt.Equal(detail.Payments[j].CreatedAt) {
+			return detail.Payments[i].ID > detail.Payments[j].ID
+		}
+		return detail.Payments[i].CreatedAt.After(detail.Payments[j].CreatedAt)
+	})
+	return detail, nil
 }
 
 func (m *MemoryStore) GetCredit(_ context.Context, tenantID, retailerID string) (CreditView, error) {
@@ -760,4 +840,14 @@ func stockKey(tenantID, productID, warehouseID string) string {
 func cloneOrder(order Order) Order {
 	order.Lines = append([]OrderLine(nil), order.Lines...)
 	return order
+}
+
+func cloneInvoice(invoice Invoice) Invoice {
+	invoice.Lines = append([]InvoiceLine(nil), invoice.Lines...)
+	return invoice
+}
+
+func cloneSalesReturn(salesReturn SalesReturn) SalesReturn {
+	salesReturn.Lines = append([]SalesReturnLine(nil), salesReturn.Lines...)
+	return salesReturn
 }
