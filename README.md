@@ -5,18 +5,20 @@ MVP scaffold for the distributor and wholesale commerce platform.
 ## MVP scope
 
 - multi-tenant catalog and pricing, with console setup for products,
-  retailers, and warehouses
+  retailers, warehouses, and suppliers
+- supplier purchase orders and full receiving into stock
 - append-only stock movements and reservations
 - order lifecycle and credit exposure
 - weighted-average inventory costing and cost of goods sold
 - sales returns with restock or damage handling
 - invoice and double-entry ledger posting
-- server-rendered browser console for stock, orders, invoices, returns, and ledger
-- JSON API for ordering and operations stock flows
+- server-rendered browser console for purchasing, stock, orders, invoices,
+  returns, and ledger
+- JSON API for purchasing, ordering, and operations stock flows
 
-Deferred: procurement, picking and dispatch, routing, driver app, WhatsApp
-intake, offline rep sync, aging and dunning, analytics, public API, webhooks,
-and native desktop or mobile clients.
+Deferred: partial purchase receipts, picking and dispatch, routing, driver app,
+WhatsApp intake, offline rep sync, aging and dunning, analytics, public API,
+webhooks, and native desktop or mobile clients.
 
 ## Run
 
@@ -44,15 +46,23 @@ change.
 
 ## Demo flow
 
-Open http://localhost:8081/ to set up products, retailers, and warehouses, then
-receive stock, create and reserve orders, issue invoices, record payments, and
-post returns in the console. Catalog records can also be created from the
-Catalog page without SQL. The same flow is available over the API:
+Open http://localhost:8081/ to set up products, retailers, warehouses, and
+suppliers, then create purchase orders, receive stock, create and reserve sales
+orders, issue invoices, record payments, and post returns in the console.
+Catalog records can also be created from the Catalog page without SQL. The same
+flow is available over the API:
 
 ```bash
 # Catalog and stock
 curl -s http://localhost:8081/api/products | jq
 curl -s http://localhost:8081/api/stock | jq
+
+# Create and receive a purchase order
+PO=$(curl -s -X POST http://localhost:8081/api/purchase-orders \
+  -H 'Content-Type: application/json' \
+  -d '{"supplier_id":"00000000-0000-0000-0000-000000000030","warehouse_id":"00000000-0000-0000-0000-000000000010","lines":[{"product_id":"00000000-0000-0000-0000-000000000101","quantity":10,"unit_cost_cents":15000}]}')
+PO_ID=$(echo "$PO" | jq -r .id)
+curl -s -X POST http://localhost:8081/api/purchase-orders/$PO_ID/receive | jq
 
 # Create, reserve, and invoice an order
 ORDER=$(curl -s -X POST http://localhost:8081/api/orders \
@@ -99,6 +109,14 @@ response reconciles on-hand stock value, the inventory account, and posted COGS.
 | GET | `/api/retailers` | List retailers and credit limits |
 | POST | `/api/retailers` | Create a retailer |
 | PUT | `/api/retailers/{id}` | Update a retailer |
+| GET | `/api/suppliers` | List suppliers |
+| POST | `/api/suppliers` | Create a supplier |
+| PUT | `/api/suppliers/{id}` | Update a supplier |
+| POST | `/api/purchase-orders` | Create a purchase order |
+| GET | `/api/purchase-orders` | List the latest 100 purchase orders |
+| GET | `/api/purchase-orders/{id}` | Read a purchase order with lines |
+| POST | `/api/purchase-orders/{id}/receive` | Receive all lines into stock and post the payable |
+| POST | `/api/purchase-orders/{id}/cancel` | Cancel an unreceived purchase order |
 | GET | `/api/stock` | On-hand, reserved, available, and valued stock |
 | GET | `/api/inventory/valuation` | Inventory value, COGS, and ledger reconciliation |
 | POST | `/api/stock/receive` | Receive stock with unit cost or apply a stock adjustment |
@@ -118,8 +136,10 @@ response reconciles on-hand stock value, the inventory account, and posted COGS.
 Requests use `X-Tenant-ID`; it defaults to the seeded demo tenant.
 
 Catalog write bodies use `sku`, `name`, `unit`, and `price_cents` for products,
-`name` and `credit_limit_cents` for retailers, and `name` for warehouses. SKUs
-are unique per tenant.
+`name` and `credit_limit_cents` for retailers, `name` for warehouses, and
+`name`, `contact_name`, and `phone` for suppliers. SKUs are unique per tenant.
+Purchase order bodies use `supplier_id`, `warehouse_id`, and `lines` with
+`product_id`, `quantity`, and `unit_cost_cents`.
 
 Stock receipts use a positive `quantity` and `unit_cost_cents`. Negative
 quantities are adjustments: they are valued at the current weighted average,
@@ -188,7 +208,10 @@ docs/adr/               decisions
 
 ## Known MVP limitations
 
-- One default warehouse per tenant; multi-warehouse allocation is deferred.
+- Sales allocate from the default warehouse; multi-warehouse allocation is
+  deferred. Purchasing can receive into any warehouse.
+- Purchase orders are received in full; partial receipts and backorders are
+  deferred.
 - Invoicing is the dispatch proxy and writes stock and COGS movements. Picking
   and dispatch will replace this.
 - Costing is moving weighted average only. Landed costs, FIFO/lots, and period

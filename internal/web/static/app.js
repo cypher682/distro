@@ -1,8 +1,12 @@
-const lineRows = document.querySelector("#order-lines");
-const lineTemplate = document.querySelector("#line-template");
-const addLine = document.querySelector("[data-add-line]");
+document.querySelectorAll("[data-line-builder]").forEach((builder) => {
+  const lineRows = builder.querySelector("[data-line-rows]");
+  const lineTemplate = builder.querySelector("template[data-line-template]");
+  const addLine = builder.querySelector("[data-add-line]");
 
-if (lineRows && lineTemplate && addLine) {
+  if (!lineRows || !lineTemplate || !addLine) {
+    return;
+  }
+
   addLine.addEventListener("click", () => {
     lineRows.append(lineTemplate.content.cloneNode(true));
   });
@@ -14,4 +18,4 @@ if (lineRows && lineTemplate && addLine) {
     }
     button.closest(".line-row").remove();
   });
-}
+});

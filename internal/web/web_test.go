@@ -16,6 +16,7 @@ const (
 	testWarehouse = "00000000-0000-0000-0000-000000000010"
 	testRetailer  = "00000000-0000-0000-0000-000000000020"
 	testProduct   = "00000000-0000-0000-0000-000000000101"
+	testSupplier  = "00000000-0000-0000-0000-000000000030"
 )
 
 func testServer(t *testing.T) (http.Handler, *core.MemoryStore, *core.Service) {
@@ -34,6 +35,7 @@ func testServer(t *testing.T) (http.Handler, *core.MemoryStore, *core.Service) {
 		Unit:       "bag",
 		PriceCents: 1000,
 	})
+	store.AddSupplier(testTenant, core.Supplier{ID: testSupplier, Name: "Golden Grain Co."})
 	store.SetStockValue(testTenant, testProduct, testWarehouse, 10, 1000)
 	service := core.NewService(store)
 	return New(service, testTenant), store, service
@@ -48,6 +50,7 @@ func TestPagesRender(t *testing.T) {
 		{"/", "Recent invoices"},
 		{"/catalog", "Product catalog"},
 		{"/inventory", "Stock ledger"},
+		{"/purchasing", "Purchase orders"},
 		{"/orders", "Order register"},
 		{"/invoices", "Receivables"},
 		{"/ledger", "Trial balance"},
@@ -221,6 +224,54 @@ func TestCatalogSetupFlow(t *testing.T) {
 	}
 	if updated.Unit != "case" || updated.PriceCents != 1300 {
 		t.Fatalf("unexpected updated product: %+v", updated)
+	}
+}
+
+func TestPurchaseOrderFlow(t *testing.T) {
+	server, store, _ := testServer(t)
+
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, formRequest(http.MethodPost, "/purchasing", url.Values{
+		"supplier_id":  {testSupplier},
+		"warehouse_id": {testWarehouse},
+		"product_id":   {testProduct},
+		"quantity":     {"2"},
+		"unit_cost":    {"1.50"},
+	}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create purchase order: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	purchaseOrderID := pathID(t, rec.Header().Get("Location"), "/purchasing/")
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/purchasing/"+purchaseOrderID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("purchase order page: expected 200, got %d", rec.Code)
+	}
+	for _, want := range []string{"Ordered", "Golden Grain Co.", "Rice 25kg", "$3.00"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("purchase order page: missing %q", want)
+		}
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/purchasing/"+purchaseOrderID+"/receive", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("receive purchase order: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/purchasing/"+purchaseOrderID, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Received") {
+		t.Fatalf("received page: expected Received, got %d", rec.Code)
+	}
+
+	levels, err := store.ListStock(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("list stock: %v", err)
+	}
+	if len(levels) != 1 || levels[0].OnHand != 12 || levels[0].InventoryValueCents != 1300 {
+		t.Fatalf("unexpected stock after receipt: %+v", levels)
 	}
 }
 

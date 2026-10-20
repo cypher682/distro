@@ -42,6 +42,8 @@ behavior for tests.
 | `retailers` | Buyers and credit limits |
 | `warehouses` | Stock locations |
 | `products` | Tenant catalog and selling price |
+| `suppliers` | Vendors for inbound stock |
+| `purchase_orders`, `purchase_order_lines` | Ordered and received supplier purchases |
 | `stock_movements` | Append-only quantity and cost movements |
 | `reservations` | Active, released, or fulfilled order allocations |
 | `orders`, `order_lines` | Draft-to-invoiced sales orders |
@@ -70,6 +72,9 @@ mutable on-hand column.
   ledger balance.
 - Stock receipts post inventory against accounts payable; negative adjustments
   post inventory shrinkage against inventory.
+- Receiving a purchase order posts each line at its captured unit cost, locks
+  the purchase order and products, and can happen only once. Cancelling is only
+  allowed before receipt.
 - Returns cannot exceed the remaining invoiced quantity. Restocked returns debit
   inventory and credit COGS at the original invoice cost; damaged returns reduce
   the receivable but leave the cost in COGS.
@@ -86,9 +91,13 @@ See [ADR-0002](adr/0002-core-money-and-stock.md),
 | Route | Purpose |
 |---|---|
 | `GET /` | Stock, receivables, ledger, and recent invoice overview |
-| `GET /catalog` | Product, retailer, and warehouse setup with create/edit forms |
-| `POST /catalog/{products,retailers,warehouses}` | Create a catalog record |
-| `POST /catalog/{products,retailers,warehouses}/{id}` | Update a catalog record |
+| `GET /catalog` | Product, retailer, warehouse, and supplier setup with create/edit forms |
+| `POST /catalog/{products,retailers,warehouses,suppliers}` | Create a catalog record |
+| `POST /catalog/{products,retailers,warehouses,suppliers}/{id}` | Update a catalog record |
+| `GET /purchasing`, `POST /purchasing` | Purchase order register and creation |
+| `GET /purchasing/{id}` | Purchase order detail with receive and cancel actions |
+| `POST /purchasing/{id}/receive` | Receive all lines into stock |
+| `POST /purchasing/{id}/cancel` | Cancel an unreceived purchase order |
 | `GET /inventory` | Stock levels, valuation, and receive/adjust form |
 | `POST /inventory/receive` | Post a receipt or negative adjustment |
 | `GET /orders`, `POST /orders` | Order register and draft creation |
@@ -103,6 +112,16 @@ The console uses the default tenant, calls the same service layer as the API,
 and renders with `html/template`. Mutations use POST and redirect back to a GET
 page with a flash or error message. A small static script adds or removes order
 lines; the core flows work without JavaScript.
+
+## Procurement flow
+
+1. `POST /api/purchase-orders` captures supplier, warehouse, products,
+   quantities, and unit costs as an `ordered` purchase order.
+2. `POST /api/purchase-orders/{id}/receive` locks the purchase order and product
+   rows, writes positive stock movements, posts inventory against accounts
+   payable, and marks the order `received`.
+3. `POST /api/purchase-orders/{id}/cancel` cancels an unreceived order without
+   touching stock or the ledger.
 
 ## Order flow
 
@@ -134,8 +153,8 @@ the API or console to untrusted clients. See [SECURITY.md](../SECURITY.md).
 
 ## Deferred
 
-Procurement, picking and dispatch, multi-warehouse allocation, lots/FIFO, tax,
-period close, cash refunds and exchanges, aging and dunning, public API
-credentials, webhooks, authentication, tenant switching, and desktop or mobile
-clients are outside this slice. The modular package boundaries leave room to add
+Partial purchase receipts, picking and dispatch, multi-warehouse allocation,
+lots/FIFO, tax, period close, cash refunds and exchanges, aging and dunning,
+public API credentials, webhooks, authentication, tenant switching, and desktop
+or mobile clients are outside this slice. The modular package boundaries leave room to add
 them without splitting the service prematurely.

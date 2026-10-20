@@ -1,0 +1,112 @@
+{{define "content"}}
+<div class="grid grid-main-side">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Purchase orders</h2>
+        <p>Supplier orders and inbound stock receipts.</p>
+      </div>
+      <span class="count">{{len .PurchaseOrders}} shown</span>
+    </div>
+    {{if .PurchaseOrders}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Order</th>
+            <th scope="col">Supplier</th>
+            <th scope="col">Warehouse</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Total</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .PurchaseOrders}}
+          <tr>
+            <td><a class="doc-link" href="/purchasing/{{.ID}}">{{shortID .ID}}</a><small>{{date .CreatedAt}}</small></td>
+            <td>{{$.SupplierName .SupplierID}}</td>
+            <td>{{$.WarehouseName .WarehouseID}}</td>
+            <td>{{template "status" .Status}}</td>
+            <td class="num">{{money .TotalCents}}</td>
+            <td class="actions">
+              {{if eq .Status "ordered"}}
+              <form method="post" action="/purchasing/{{.ID}}/receive" onsubmit="return confirm('Receive this order? Stock and the supplier payable will be posted.')">
+                <button class="button button-small" type="submit">Receive</button>
+              </form>
+              {{end}}
+              <a class="button button-small button-quiet" href="/purchasing/{{.ID}}">Open</a>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No purchase orders yet. Create one to replenish stock.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel panel-sticky">
+    <div class="panel-head">
+      <div>
+        <h2>New purchase order</h2>
+        <p>Costs are captured when the order is received.</p>
+      </div>
+    </div>
+    {{if and .Suppliers .Products .Warehouses}}
+    <form class="form" method="post" action="/purchasing">
+      <label>
+        <span>Supplier</span>
+        <select name="supplier_id" required>
+          {{range .Suppliers}}
+          <option value="{{.ID}}">{{.Name}}</option>
+          {{end}}
+        </select>
+      </label>
+      <label>
+        <span>Receive into</span>
+        <select name="warehouse_id" required>
+          {{range .Warehouses}}
+          <option value="{{.ID}}">{{.Name}}</option>
+          {{end}}
+        </select>
+      </label>
+      <div class="field-label">Lines</div>
+      <div data-line-builder>
+        <div class="line-rows" data-line-rows>
+          <div class="line-row line-row-cost">
+            <select name="product_id" aria-label="Product">
+              {{range .Products}}
+              <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+              {{end}}
+            </select>
+            <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
+            <input name="unit_cost" type="text" inputmode="decimal" value="0.00" aria-label="Unit cost">
+            <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+          </div>
+        </div>
+        <template data-line-template>
+          <div class="line-row line-row-cost">
+            <select name="product_id" aria-label="Product">
+              {{range .Products}}
+              <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+              {{end}}
+            </select>
+            <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
+            <input name="unit_cost" type="text" inputmode="decimal" value="0.00" aria-label="Unit cost">
+            <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+          </div>
+        </template>
+        <div class="form-actions">
+          <button class="button button-secondary" type="button" data-add-line>Add line</button>
+          <button class="button" type="submit">Create order</button>
+        </div>
+      </div>
+    </form>
+    {{else}}
+    <div class="empty">Add a supplier, product, and warehouse in <a class="link" href="/catalog">Catalog</a> before creating a purchase order.</div>
+    {{end}}
+  </aside>
+</div>
+{{end}}

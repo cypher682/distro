@@ -12,6 +12,13 @@ VALUES ('00000000-0000-0000-0000-000000000020',
         'Demo Retailer',
         10000000);
 
+INSERT INTO suppliers (id, tenant_id, name, contact_name, phone)
+VALUES ('00000000-0000-0000-0000-000000000030',
+        '00000000-0000-0000-0000-000000000001',
+        'Golden Grain Co.',
+        'Amina Yusuf',
+        '+254 700 000 030');
+
 INSERT INTO products (id, tenant_id, sku, name, unit, price_cents)
 VALUES
     ('00000000-0000-0000-0000-000000000101',

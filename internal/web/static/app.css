@@ -311,6 +311,10 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .panel {
   min-width: 0;
   border: 1px solid var(--line);
@@ -653,6 +657,10 @@ select:hover {
   text-align: right;
 }
 
+.line-row-cost {
+  grid-template-columns: minmax(0, 1fr) 58px 82px auto;
+}
+
 .check {
   display: inline-flex;
   flex-direction: row;
@@ -899,7 +907,8 @@ select:hover {
 @media (max-width: 1180px) {
   .grid-2-1,
   .grid-main-side,
-  .grid-2 {
+  .grid-2,
+  .grid-3 {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -993,6 +1002,10 @@ select:hover {
 
   .line-row {
     grid-template-columns: minmax(0, 1fr) 62px;
+  }
+
+  .line-row-cost {
+    grid-template-columns: minmax(0, 1fr) 58px 82px;
   }
 
   .line-row .button {

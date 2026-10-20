@@ -110,6 +110,111 @@ func (s *Service) UpdateRetailer(ctx context.Context, tenantID, retailerID strin
 	return s.store.UpdateRetailer(ctx, tenantID, retailerID, clean)
 }
 
+func (s *Service) ListSuppliers(ctx context.Context, tenantID string) ([]Supplier, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.ListSuppliers(ctx, tenantID)
+}
+
+func (s *Service) CreateSupplier(ctx context.Context, tenantID string, input SupplierInput) (Supplier, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Supplier{}, err
+	}
+	clean, err := cleanSupplierInput(input)
+	if err != nil {
+		return Supplier{}, err
+	}
+	return s.store.CreateSupplier(ctx, tenantID, clean)
+}
+
+func (s *Service) UpdateSupplier(ctx context.Context, tenantID, supplierID string, input SupplierInput) (Supplier, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Supplier{}, err
+	}
+	if supplierID == "" {
+		return Supplier{}, fmt.Errorf("%w: supplier_id is required", ErrInvalid)
+	}
+	clean, err := cleanSupplierInput(input)
+	if err != nil {
+		return Supplier{}, err
+	}
+	return s.store.UpdateSupplier(ctx, tenantID, supplierID, clean)
+}
+
+func (s *Service) CreatePurchaseOrder(ctx context.Context, tenantID string, input CreatePurchaseOrderInput) (PurchaseOrder, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return PurchaseOrder{}, err
+	}
+	if input.SupplierID == "" {
+		return PurchaseOrder{}, fmt.Errorf("%w: supplier_id is required", ErrInvalid)
+	}
+	if input.WarehouseID == "" {
+		return PurchaseOrder{}, fmt.Errorf("%w: warehouse_id is required", ErrInvalid)
+	}
+	if len(input.Lines) == 0 {
+		return PurchaseOrder{}, fmt.Errorf("%w: at least one purchase order line is required", ErrInvalid)
+	}
+
+	seen := make(map[string]struct{}, len(input.Lines))
+	lines := make([]CreatePurchaseOrderLine, 0, len(input.Lines))
+	for _, line := range input.Lines {
+		if line.ProductID == "" {
+			return PurchaseOrder{}, fmt.Errorf("%w: product_id is required", ErrInvalid)
+		}
+		if line.Quantity <= 0 {
+			return PurchaseOrder{}, fmt.Errorf("%w: quantity must be positive", ErrInvalid)
+		}
+		if line.UnitCostCents < 0 {
+			return PurchaseOrder{}, fmt.Errorf("%w: unit_cost_cents must not be negative", ErrInvalid)
+		}
+		if _, ok := seen[line.ProductID]; ok {
+			return PurchaseOrder{}, fmt.Errorf("%w: duplicate product_id %s", ErrInvalid, line.ProductID)
+		}
+		seen[line.ProductID] = struct{}{}
+		lines = append(lines, line)
+	}
+	input.Lines = lines
+	return s.store.CreatePurchaseOrder(ctx, tenantID, input)
+}
+
+func (s *Service) ListPurchaseOrders(ctx context.Context, tenantID string) ([]PurchaseOrder, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.ListPurchaseOrders(ctx, tenantID)
+}
+
+func (s *Service) GetPurchaseOrder(ctx context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return PurchaseOrder{}, err
+	}
+	if purchaseOrderID == "" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase_order_id is required", ErrInvalid)
+	}
+	return s.store.GetPurchaseOrder(ctx, tenantID, purchaseOrderID)
+}
+
+func (s *Service) ReceivePurchaseOrder(ctx context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return PurchaseOrder{}, err
+	}
+	if purchaseOrderID == "" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase_order_id is required", ErrInvalid)
+	}
+	return s.store.ReceivePurchaseOrder(ctx, tenantID, purchaseOrderID)
+}
+
+func (s *Service) CancelPurchaseOrder(ctx context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return PurchaseOrder{}, err
+	}
+	if purchaseOrderID == "" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase_order_id is required", ErrInvalid)
+	}
+	return s.store.CancelPurchaseOrder(ctx, tenantID, purchaseOrderID)
+}
+
 func (s *Service) ListStock(ctx context.Context, tenantID string) ([]StockLevel, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return nil, err
@@ -344,6 +449,23 @@ func cleanWarehouseInput(input WarehouseInput) (WarehouseInput, error) {
 		return WarehouseInput{}, fmt.Errorf("%w: warehouse name is required", ErrInvalid)
 	case len(input.Name) > 160:
 		return WarehouseInput{}, fmt.Errorf("%w: warehouse name must be 160 characters or fewer", ErrInvalid)
+	}
+	return input, nil
+}
+
+func cleanSupplierInput(input SupplierInput) (SupplierInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.ContactName = strings.TrimSpace(input.ContactName)
+	input.Phone = strings.TrimSpace(input.Phone)
+	switch {
+	case input.Name == "":
+		return SupplierInput{}, fmt.Errorf("%w: supplier name is required", ErrInvalid)
+	case len(input.Name) > 160:
+		return SupplierInput{}, fmt.Errorf("%w: supplier name must be 160 characters or fewer", ErrInvalid)
+	case len(input.ContactName) > 160:
+		return SupplierInput{}, fmt.Errorf("%w: contact name must be 160 characters or fewer", ErrInvalid)
+	case len(input.Phone) > 40:
+		return SupplierInput{}, fmt.Errorf("%w: phone must be 40 characters or fewer", ErrInvalid)
 	}
 	return input, nil
 }

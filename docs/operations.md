@@ -53,8 +53,8 @@ runner yet, so a schema change requires a reset in local development.
 ## Seed data
 
 The Compose stack applies migrations and seed data only when the database volume
-is first created. The seed defines one tenant, one warehouse, two products, and
-two retailers.
+is first created. The seed defines one tenant, one warehouse, two products, one
+retailer, and one supplier.
 
 To reload seed data into an existing reset volume:
 
@@ -70,7 +70,9 @@ existing rows. Reset first when a clean state is required.
 Open http://localhost:8081/ after the stack is healthy. The console is pinned to
 the seeded demo tenant and has no authentication. Use it to:
 
-- add or edit products, retailers, and warehouses on the Catalog page;
+- add or edit products, retailers, warehouses, and suppliers on the Catalog
+  page;
+- create a purchase order, receive it into stock, or cancel it before receipt;
 - receive stock or post a negative adjustment;
 - create a draft order, reserve it, cancel it, or issue an invoice;
 - record a payment or return goods with or without restocking;
@@ -104,9 +106,15 @@ Both responses must contain `"balanced": true`. On a clean seed, inventory value
 is `2100000` cents. After an invoice, restocked return, and payment, the trial
 balance must still reconcile and inventory must equal the ledger balance.
 
-To verify catalog setup, open `/catalog`, create a product, retailer, and
-warehouse, then edit the product and confirm the new values appear in the order
-and receipt forms.
+To verify catalog setup, open `/catalog`, create a product, retailer, warehouse,
+and supplier, then edit the product and confirm the new values appear in the
+order and purchase forms.
+
+To verify purchasing, open `/purchasing`, create a purchase order with a unit
+cost, then receive it. Stock on hand and inventory value must increase by the
+line total, accounts payable must increase by the order total, and both
+reconciliation endpoints must stay balanced. A second receive attempt must
+conflict; an unreceived order can be cancelled.
 
 To verify the console manually, open `/`, create and reserve an order, invoice
 it, record a partial payment, then return one unit from the invoice page. The

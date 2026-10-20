@@ -15,6 +15,7 @@ const (
 	apiWarehouse = "00000000-0000-0000-0000-000000000010"
 	apiRetailer  = "00000000-0000-0000-0000-000000000020"
 	apiProduct   = "00000000-0000-0000-0000-000000000101"
+	apiSupplier  = "00000000-0000-0000-0000-000000000030"
 )
 
 func apiRouter() http.Handler {
@@ -32,6 +33,7 @@ func apiRouter() http.Handler {
 		Unit:       "bag",
 		PriceCents: 1000,
 	})
+	store.AddSupplier(apiTenant, core.Supplier{ID: apiSupplier, Name: "Golden Grain Co."})
 	store.SetStock(apiTenant, apiProduct, apiWarehouse, 10)
 	return NewRouter(fakePinger{}, core.NewService(store))
 }
@@ -396,6 +398,83 @@ func TestCatalogEndpointsCreateAndUpdate(t *testing.T) {
 	router.ServeHTTP(warehouseRec, warehouse)
 	if warehouseRec.Code != http.StatusCreated {
 		t.Fatalf("create warehouse: expected 201, got %d: %s", warehouseRec.Code, warehouseRec.Body.String())
+	}
+
+	supplier := httptest.NewRequest(http.MethodPost, "/api/suppliers", strings.NewReader(`{
+		"name": "Coastal Foods", "contact_name": "Sam Reed", "phone": "+254 700 111"
+	}`))
+	supplier.Header.Set("Content-Type", "application/json")
+	supplierRec := httptest.NewRecorder()
+	router.ServeHTTP(supplierRec, supplier)
+	if supplierRec.Code != http.StatusCreated {
+		t.Fatalf("create supplier: expected 201, got %d: %s", supplierRec.Code, supplierRec.Body.String())
+	}
+}
+
+func TestPurchaseOrderReceiveEndpoint(t *testing.T) {
+	router := apiRouter()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/purchase-orders", strings.NewReader(`{
+		"supplier_id": "`+apiSupplier+`",
+		"warehouse_id": "`+apiWarehouse+`",
+		"lines": [{"product_id": "`+apiProduct+`", "quantity": 2, "unit_cost_cents": 900}]
+	}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create purchase order: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	var purchaseOrder core.PurchaseOrder
+	if err := json.NewDecoder(createRec.Body).Decode(&purchaseOrder); err != nil {
+		t.Fatalf("decode purchase order: %v", err)
+	}
+	if purchaseOrder.TotalCents != 1800 || purchaseOrder.Status != "ordered" {
+		t.Fatalf("unexpected purchase order: %+v", purchaseOrder)
+	}
+
+	receive := httptest.NewRequest(http.MethodPost, "/api/purchase-orders/"+purchaseOrder.ID+"/receive", nil)
+	receiveRec := httptest.NewRecorder()
+	router.ServeHTTP(receiveRec, receive)
+	if receiveRec.Code != http.StatusOK {
+		t.Fatalf("receive purchase order: expected 200, got %d: %s", receiveRec.Code, receiveRec.Body.String())
+	}
+
+	detail := httptest.NewRequest(http.MethodGet, "/api/purchase-orders/"+purchaseOrder.ID, nil)
+	detailRec := httptest.NewRecorder()
+	router.ServeHTTP(detailRec, detail)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("get purchase order: expected 200, got %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+	var received core.PurchaseOrder
+	if err := json.NewDecoder(detailRec.Body).Decode(&received); err != nil {
+		t.Fatalf("decode purchase order detail: %v", err)
+	}
+	if received.Status != "received" || len(received.Lines) != 1 || received.ReceivedAt == nil {
+		t.Fatalf("unexpected received order: %+v", received)
+	}
+
+	stock := httptest.NewRequest(http.MethodGet, "/api/stock", nil)
+	stockRec := httptest.NewRecorder()
+	router.ServeHTTP(stockRec, stock)
+	var levels []core.StockLevel
+	if err := json.NewDecoder(stockRec.Body).Decode(&levels); err != nil {
+		t.Fatalf("decode stock: %v", err)
+	}
+	if len(levels) != 1 || levels[0].OnHand != 12 || levels[0].InventoryValueCents != 1800 {
+		t.Fatalf("unexpected stock after receive: %+v", levels)
+	}
+
+	balance := httptest.NewRequest(http.MethodGet, "/api/ledger/trial-balance", nil)
+	balanceRec := httptest.NewRecorder()
+	router.ServeHTTP(balanceRec, balance)
+	var trial trialBalanceResponse
+	if err := json.NewDecoder(balanceRec.Body).Decode(&trial); err != nil {
+		t.Fatalf("decode trial balance: %v", err)
+	}
+	if !trial.Balanced {
+		t.Fatalf("expected balanced ledger, got %+v", trial)
 	}
 }
 

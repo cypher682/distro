@@ -46,6 +46,50 @@ type Retailer struct {
 	CreditLimitCents int64  `json:"credit_limit_cents"`
 }
 
+type Supplier struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ContactName string `json:"contact_name"`
+	Phone       string `json:"phone"`
+}
+
+type SupplierInput struct {
+	Name        string `json:"name"`
+	ContactName string `json:"contact_name"`
+	Phone       string `json:"phone"`
+}
+
+type PurchaseOrderLine struct {
+	ID             string `json:"id"`
+	ProductID      string `json:"product_id"`
+	Quantity       int    `json:"quantity"`
+	UnitCostCents  int64  `json:"unit_cost_cents"`
+	LineTotalCents int64  `json:"line_total_cents"`
+}
+
+type PurchaseOrder struct {
+	ID          string              `json:"id"`
+	SupplierID  string              `json:"supplier_id"`
+	WarehouseID string              `json:"warehouse_id"`
+	Status      string              `json:"status"`
+	TotalCents  int64               `json:"total_cents"`
+	Lines       []PurchaseOrderLine `json:"lines"`
+	CreatedAt   time.Time           `json:"created_at"`
+	ReceivedAt  *time.Time          `json:"received_at,omitempty"`
+}
+
+type CreatePurchaseOrderLine struct {
+	ProductID     string `json:"product_id"`
+	Quantity      int    `json:"quantity"`
+	UnitCostCents int64  `json:"unit_cost_cents"`
+}
+
+type CreatePurchaseOrderInput struct {
+	SupplierID  string                    `json:"supplier_id"`
+	WarehouseID string                    `json:"warehouse_id"`
+	Lines       []CreatePurchaseOrderLine `json:"lines"`
+}
+
 type StockLevel struct {
 	ProductID           string `json:"product_id"`
 	WarehouseID         string `json:"warehouse_id"`

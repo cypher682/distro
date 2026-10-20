@@ -9,20 +9,22 @@ import (
 )
 
 type MemoryStore struct {
-	mu            sync.Mutex
-	products      map[string]map[string]Product
-	retailers     map[string]map[string]Retailer
-	warehouses    map[string]map[string]string
-	onHand        map[string]int64
-	inventoryCost map[string]int64
-	reservations  map[string]*memoryReservation
-	orders        map[string]map[string]*Order
-	invoices      map[string]map[string]*Invoice
-	invoiceLines  map[string][]InvoiceLine
-	payments      map[string]map[string]*Payment
-	returns       map[string]map[string]*SalesReturn
-	ledger        []memoryLedgerEntry
-	nextID        uint64
+	mu             sync.Mutex
+	products       map[string]map[string]Product
+	retailers      map[string]map[string]Retailer
+	suppliers      map[string]map[string]Supplier
+	warehouses     map[string]map[string]string
+	purchaseOrders map[string]map[string]*PurchaseOrder
+	onHand         map[string]int64
+	inventoryCost  map[string]int64
+	reservations   map[string]*memoryReservation
+	orders         map[string]map[string]*Order
+	invoices       map[string]map[string]*Invoice
+	invoiceLines   map[string][]InvoiceLine
+	payments       map[string]map[string]*Payment
+	returns        map[string]map[string]*SalesReturn
+	ledger         []memoryLedgerEntry
+	nextID         uint64
 }
 
 type memoryReservation struct {
@@ -46,17 +48,19 @@ type memoryLedgerEntry struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		products:      make(map[string]map[string]Product),
-		retailers:     make(map[string]map[string]Retailer),
-		warehouses:    make(map[string]map[string]string),
-		onHand:        make(map[string]int64),
-		inventoryCost: make(map[string]int64),
-		reservations:  make(map[string]*memoryReservation),
-		orders:        make(map[string]map[string]*Order),
-		invoices:      make(map[string]map[string]*Invoice),
-		invoiceLines:  make(map[string][]InvoiceLine),
-		payments:      make(map[string]map[string]*Payment),
-		returns:       make(map[string]map[string]*SalesReturn),
+		products:       make(map[string]map[string]Product),
+		retailers:      make(map[string]map[string]Retailer),
+		suppliers:      make(map[string]map[string]Supplier),
+		warehouses:     make(map[string]map[string]string),
+		purchaseOrders: make(map[string]map[string]*PurchaseOrder),
+		onHand:         make(map[string]int64),
+		inventoryCost:  make(map[string]int64),
+		reservations:   make(map[string]*memoryReservation),
+		orders:         make(map[string]map[string]*Order),
+		invoices:       make(map[string]map[string]*Invoice),
+		invoiceLines:   make(map[string][]InvoiceLine),
+		payments:       make(map[string]map[string]*Payment),
+		returns:        make(map[string]map[string]*SalesReturn),
 	}
 }
 
@@ -70,6 +74,12 @@ func (m *MemoryStore) AddRetailer(tenantID string, retailer Retailer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tenantRetailers(tenantID)[retailer.ID] = retailer
+}
+
+func (m *MemoryStore) AddSupplier(tenantID string, supplier Supplier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tenantSuppliers(tenantID)[supplier.ID] = supplier
 }
 
 func (m *MemoryStore) AddWarehouse(tenantID, warehouseID, name string) {
@@ -223,6 +233,158 @@ func (m *MemoryStore) UpdateRetailer(_ context.Context, tenantID, retailerID str
 	retailer.CreditLimitCents = input.CreditLimitCents
 	retailers[retailerID] = retailer
 	return retailer, nil
+}
+
+func (m *MemoryStore) ListSuppliers(_ context.Context, tenantID string) ([]Supplier, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	suppliers := make([]Supplier, 0, len(m.tenantSuppliers(tenantID)))
+	for _, supplier := range m.tenantSuppliers(tenantID) {
+		suppliers = append(suppliers, supplier)
+	}
+	sort.Slice(suppliers, func(i, j int) bool {
+		return suppliers[i].Name < suppliers[j].Name
+	})
+	return suppliers, nil
+}
+
+func (m *MemoryStore) CreateSupplier(_ context.Context, tenantID string, input SupplierInput) (Supplier, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	supplier := Supplier{
+		ID:          m.newID(),
+		Name:        input.Name,
+		ContactName: input.ContactName,
+		Phone:       input.Phone,
+	}
+	m.tenantSuppliers(tenantID)[supplier.ID] = supplier
+	return supplier, nil
+}
+
+func (m *MemoryStore) UpdateSupplier(_ context.Context, tenantID, supplierID string, input SupplierInput) (Supplier, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	suppliers := m.tenantSuppliers(tenantID)
+	supplier, ok := suppliers[supplierID]
+	if !ok {
+		return Supplier{}, fmt.Errorf("%w: supplier %s", ErrNotFound, supplierID)
+	}
+	supplier.Name = input.Name
+	supplier.ContactName = input.ContactName
+	supplier.Phone = input.Phone
+	suppliers[supplierID] = supplier
+	return supplier, nil
+}
+
+func (m *MemoryStore) CreatePurchaseOrder(_ context.Context, tenantID string, input CreatePurchaseOrderInput) (PurchaseOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.tenantSuppliers(tenantID)[input.SupplierID]; !ok {
+		return PurchaseOrder{}, fmt.Errorf("%w: supplier %s", ErrNotFound, input.SupplierID)
+	}
+	if _, ok := m.tenantWarehouses(tenantID)[input.WarehouseID]; !ok {
+		return PurchaseOrder{}, fmt.Errorf("%w: warehouse %s", ErrNotFound, input.WarehouseID)
+	}
+
+	purchaseOrder := &PurchaseOrder{
+		ID:          m.newID(),
+		SupplierID:  input.SupplierID,
+		WarehouseID: input.WarehouseID,
+		Status:      "ordered",
+		CreatedAt:   time.Now().UTC(),
+	}
+	for _, requestLine := range input.Lines {
+		if _, ok := m.tenantProducts(tenantID)[requestLine.ProductID]; !ok {
+			return PurchaseOrder{}, fmt.Errorf("%w: product %s", ErrNotFound, requestLine.ProductID)
+		}
+		lineTotal := int64(requestLine.Quantity) * requestLine.UnitCostCents
+		purchaseOrder.Lines = append(purchaseOrder.Lines, PurchaseOrderLine{
+			ID:             m.newID(),
+			ProductID:      requestLine.ProductID,
+			Quantity:       requestLine.Quantity,
+			UnitCostCents:  requestLine.UnitCostCents,
+			LineTotalCents: lineTotal,
+		})
+		purchaseOrder.TotalCents += lineTotal
+	}
+	m.tenantPurchaseOrders(tenantID)[purchaseOrder.ID] = purchaseOrder
+	return clonePurchaseOrder(*purchaseOrder), nil
+}
+
+func (m *MemoryStore) ListPurchaseOrders(_ context.Context, tenantID string) ([]PurchaseOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]PurchaseOrder, 0, len(m.purchaseOrders[tenantID]))
+	for _, purchaseOrder := range m.purchaseOrders[tenantID] {
+		out = append(out, clonePurchaseOrder(*purchaseOrder))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (m *MemoryStore) GetPurchaseOrder(_ context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	purchaseOrder, ok := m.purchaseOrders[tenantID][purchaseOrderID]
+	if !ok {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s", ErrNotFound, purchaseOrderID)
+	}
+	return clonePurchaseOrder(*purchaseOrder), nil
+}
+
+func (m *MemoryStore) ReceivePurchaseOrder(_ context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	purchaseOrder, ok := m.purchaseOrders[tenantID][purchaseOrderID]
+	if !ok {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s", ErrNotFound, purchaseOrderID)
+	}
+	if purchaseOrder.Status != "ordered" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s is %s, expected ordered", ErrConflict, purchaseOrderID, purchaseOrder.Status)
+	}
+
+	for _, line := range purchaseOrder.Lines {
+		key := stockKey(tenantID, line.ProductID, purchaseOrder.WarehouseID)
+		m.onHand[key] += int64(line.Quantity)
+		m.inventoryCost[key] += line.LineTotalCents
+	}
+	if purchaseOrder.TotalCents > 0 {
+		m.ledger = append(m.ledger,
+			memoryLedgerEntry{TenantID: tenantID, Account: "inventory", DebitCents: purchaseOrder.TotalCents, ReferenceType: "purchase_receipt", ReferenceID: purchaseOrder.ID},
+			memoryLedgerEntry{TenantID: tenantID, Account: "accounts_payable", CreditCents: purchaseOrder.TotalCents, ReferenceType: "purchase_receipt", ReferenceID: purchaseOrder.ID},
+		)
+	}
+	now := time.Now().UTC()
+	purchaseOrder.Status = "received"
+	purchaseOrder.ReceivedAt = &now
+	return clonePurchaseOrder(*purchaseOrder), nil
+}
+
+func (m *MemoryStore) CancelPurchaseOrder(_ context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	purchaseOrder, ok := m.purchaseOrders[tenantID][purchaseOrderID]
+	if !ok {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s", ErrNotFound, purchaseOrderID)
+	}
+	if purchaseOrder.Status != "ordered" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s is %s, expected ordered", ErrConflict, purchaseOrderID, purchaseOrder.Status)
+	}
+	purchaseOrder.Status = "cancelled"
+	return clonePurchaseOrder(*purchaseOrder), nil
 }
 
 func (m *MemoryStore) ListStock(_ context.Context, tenantID string) ([]StockLevel, error) {
@@ -891,6 +1053,20 @@ func (m *MemoryStore) tenantRetailers(tenantID string) map[string]Retailer {
 	return m.retailers[tenantID]
 }
 
+func (m *MemoryStore) tenantSuppliers(tenantID string) map[string]Supplier {
+	if m.suppliers[tenantID] == nil {
+		m.suppliers[tenantID] = make(map[string]Supplier)
+	}
+	return m.suppliers[tenantID]
+}
+
+func (m *MemoryStore) tenantPurchaseOrders(tenantID string) map[string]*PurchaseOrder {
+	if m.purchaseOrders[tenantID] == nil {
+		m.purchaseOrders[tenantID] = make(map[string]*PurchaseOrder)
+	}
+	return m.purchaseOrders[tenantID]
+}
+
 func (m *MemoryStore) tenantWarehouses(tenantID string) map[string]string {
 	if m.warehouses[tenantID] == nil {
 		m.warehouses[tenantID] = make(map[string]string)
@@ -943,6 +1119,15 @@ func cloneInvoice(invoice Invoice) Invoice {
 func cloneSalesReturn(salesReturn SalesReturn) SalesReturn {
 	salesReturn.Lines = append([]SalesReturnLine(nil), salesReturn.Lines...)
 	return salesReturn
+}
+
+func clonePurchaseOrder(purchaseOrder PurchaseOrder) PurchaseOrder {
+	purchaseOrder.Lines = append([]PurchaseOrderLine(nil), purchaseOrder.Lines...)
+	if purchaseOrder.ReceivedAt != nil {
+		receivedAt := *purchaseOrder.ReceivedAt
+		purchaseOrder.ReceivedAt = &receivedAt
+	}
+	return purchaseOrder
 }
 
 func (m *MemoryStore) newID() string {

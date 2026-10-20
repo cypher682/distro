@@ -196,6 +196,315 @@ func (s *PostgresStore) UpdateRetailer(ctx context.Context, tenantID, retailerID
 	return retailer, err
 }
 
+func (s *PostgresStore) ListSuppliers(ctx context.Context, tenantID string) ([]Supplier, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, name, contact_name, phone
+		FROM suppliers
+		WHERE tenant_id = $1::uuid
+		ORDER BY name, id
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Supplier, 0)
+	for rows.Next() {
+		var supplier Supplier
+		if err := rows.Scan(&supplier.ID, &supplier.Name, &supplier.ContactName, &supplier.Phone); err != nil {
+			return nil, err
+		}
+		out = append(out, supplier)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) CreateSupplier(ctx context.Context, tenantID string, input SupplierInput) (Supplier, error) {
+	var supplier Supplier
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO suppliers (tenant_id, name, contact_name, phone)
+		VALUES ($1::uuid, $2, $3, $4)
+		RETURNING id::text, name, contact_name, phone
+	`, tenantID, input.Name, input.ContactName, input.Phone).Scan(
+		&supplier.ID,
+		&supplier.Name,
+		&supplier.ContactName,
+		&supplier.Phone,
+	)
+	return supplier, err
+}
+
+func (s *PostgresStore) UpdateSupplier(ctx context.Context, tenantID, supplierID string, input SupplierInput) (Supplier, error) {
+	var supplier Supplier
+	err := s.pool.QueryRow(ctx, `
+		UPDATE suppliers
+		SET name = $3, contact_name = $4, phone = $5
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		RETURNING id::text, name, contact_name, phone
+	`, tenantID, supplierID, input.Name, input.ContactName, input.Phone).Scan(
+		&supplier.ID,
+		&supplier.Name,
+		&supplier.ContactName,
+		&supplier.Phone,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Supplier{}, fmt.Errorf("%w: supplier %s", ErrNotFound, supplierID)
+	}
+	return supplier, err
+}
+
+func (s *PostgresStore) CreatePurchaseOrder(ctx context.Context, tenantID string, input CreatePurchaseOrderInput) (PurchaseOrder, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var id string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text FROM suppliers
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, input.SupplierID).Scan(&id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PurchaseOrder{}, fmt.Errorf("%w: supplier %s", ErrNotFound, input.SupplierID)
+		}
+		return PurchaseOrder{}, err
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text FROM warehouses
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, input.WarehouseID).Scan(&id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PurchaseOrder{}, fmt.Errorf("%w: warehouse %s", ErrNotFound, input.WarehouseID)
+		}
+		return PurchaseOrder{}, err
+	}
+
+	purchaseOrder := PurchaseOrder{
+		SupplierID:  input.SupplierID,
+		WarehouseID: input.WarehouseID,
+		Status:      "ordered",
+	}
+	for _, requestLine := range input.Lines {
+		if err := tx.QueryRow(ctx, `
+			SELECT id::text FROM products
+			WHERE tenant_id = $1::uuid AND id = $2::uuid
+		`, tenantID, requestLine.ProductID).Scan(&id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return PurchaseOrder{}, fmt.Errorf("%w: product %s", ErrNotFound, requestLine.ProductID)
+			}
+			return PurchaseOrder{}, err
+		}
+		lineTotal := int64(requestLine.Quantity) * requestLine.UnitCostCents
+		purchaseOrder.Lines = append(purchaseOrder.Lines, PurchaseOrderLine{
+			ProductID:      requestLine.ProductID,
+			Quantity:       requestLine.Quantity,
+			UnitCostCents:  requestLine.UnitCostCents,
+			LineTotalCents: lineTotal,
+		})
+		purchaseOrder.TotalCents += lineTotal
+	}
+
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO purchase_orders
+			(tenant_id, supplier_id, warehouse_id, status, total_cents)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'ordered', $4)
+		RETURNING id::text, created_at
+	`, tenantID, input.SupplierID, input.WarehouseID, purchaseOrder.TotalCents).Scan(
+		&purchaseOrder.ID,
+		&purchaseOrder.CreatedAt,
+	); err != nil {
+		return PurchaseOrder{}, err
+	}
+
+	for i := range purchaseOrder.Lines {
+		line := &purchaseOrder.Lines[i]
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO purchase_order_lines
+				(tenant_id, purchase_order_id, product_id, quantity, unit_cost_cents, line_total_cents)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6)
+			RETURNING id::text
+		`, tenantID, purchaseOrder.ID, line.ProductID, line.Quantity, line.UnitCostCents, line.LineTotalCents).Scan(&line.ID); err != nil {
+			return PurchaseOrder{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return PurchaseOrder{}, err
+	}
+	return purchaseOrder, nil
+}
+
+func (s *PostgresStore) ListPurchaseOrders(ctx context.Context, tenantID string) ([]PurchaseOrder, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, supplier_id::text, warehouse_id::text, status,
+		       total_cents, created_at, received_at
+		FROM purchase_orders
+		WHERE tenant_id = $1::uuid
+		ORDER BY created_at DESC, id DESC
+		LIMIT 100
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]PurchaseOrder, 0)
+	for rows.Next() {
+		var purchaseOrder PurchaseOrder
+		if err := rows.Scan(
+			&purchaseOrder.ID,
+			&purchaseOrder.SupplierID,
+			&purchaseOrder.WarehouseID,
+			&purchaseOrder.Status,
+			&purchaseOrder.TotalCents,
+			&purchaseOrder.CreatedAt,
+			&purchaseOrder.ReceivedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, purchaseOrder)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetPurchaseOrder(ctx context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	purchaseOrder, err := loadPurchaseOrder(ctx, s.pool, tenantID, purchaseOrderID)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, product_id::text, quantity, unit_cost_cents, line_total_cents
+		FROM purchase_order_lines
+		WHERE tenant_id = $1::uuid AND purchase_order_id = $2::uuid
+		ORDER BY product_id
+	`, tenantID, purchaseOrderID)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var line PurchaseOrderLine
+		if err := rows.Scan(&line.ID, &line.ProductID, &line.Quantity, &line.UnitCostCents, &line.LineTotalCents); err != nil {
+			return PurchaseOrder{}, err
+		}
+		purchaseOrder.Lines = append(purchaseOrder.Lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		return PurchaseOrder{}, err
+	}
+	return purchaseOrder, nil
+}
+
+func (s *PostgresStore) ReceivePurchaseOrder(ctx context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	purchaseOrder, err := loadPurchaseOrder(ctx, tx, tenantID, purchaseOrderID, true)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	if purchaseOrder.Status != "ordered" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s is %s, expected ordered", ErrConflict, purchaseOrderID, purchaseOrder.Status)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, product_id::text, quantity, unit_cost_cents, line_total_cents
+		FROM purchase_order_lines
+		WHERE tenant_id = $1::uuid AND purchase_order_id = $2::uuid
+		ORDER BY product_id
+	`, tenantID, purchaseOrderID)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	var lines []PurchaseOrderLine
+	for rows.Next() {
+		var line PurchaseOrderLine
+		if err := rows.Scan(&line.ID, &line.ProductID, &line.Quantity, &line.UnitCostCents, &line.LineTotalCents); err != nil {
+			rows.Close()
+			return PurchaseOrder{}, err
+		}
+		lines = append(lines, line)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return PurchaseOrder{}, err
+	}
+
+	for _, line := range lines {
+		var id string
+		if err := tx.QueryRow(ctx, `
+			SELECT id::text FROM products
+			WHERE tenant_id = $1::uuid AND id = $2::uuid
+			FOR UPDATE
+		`, tenantID, line.ProductID).Scan(&id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return PurchaseOrder{}, fmt.Errorf("%w: product %s", ErrNotFound, line.ProductID)
+			}
+			return PurchaseOrder{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO stock_movements
+				(tenant_id, product_id, warehouse_id, quantity_delta, unit_cost_cents, total_cost_cents, reason, reference_type, reference_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, 'purchase receipt', 'purchase_order', $7::uuid)
+		`, tenantID, line.ProductID, purchaseOrder.WarehouseID, line.Quantity, line.UnitCostCents, line.LineTotalCents, purchaseOrderID); err != nil {
+			return PurchaseOrder{}, err
+		}
+	}
+
+	if purchaseOrder.TotalCents > 0 {
+		if _, err := tx.Exec(ctx, `
+			WITH g AS (SELECT gen_random_uuid() AS id)
+			INSERT INTO ledger_entries
+				(tenant_id, entry_group, account, debit_cents, credit_cents, reference_type, reference_id)
+			SELECT $1::uuid, g.id, 'inventory', $2, 0, 'purchase_receipt', $3::uuid FROM g
+			UNION ALL
+			SELECT $1::uuid, g.id, 'accounts_payable', 0, $2, 'purchase_receipt', $3::uuid FROM g
+		`, tenantID, purchaseOrder.TotalCents, purchaseOrderID); err != nil {
+			return PurchaseOrder{}, err
+		}
+	}
+
+	if err := tx.QueryRow(ctx, `
+		UPDATE purchase_orders
+		SET status = 'received', received_at = now()
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		RETURNING received_at
+	`, tenantID, purchaseOrderID).Scan(&purchaseOrder.ReceivedAt); err != nil {
+		return PurchaseOrder{}, err
+	}
+	purchaseOrder.Status = "received"
+	purchaseOrder.Lines = lines
+
+	if err := tx.Commit(ctx); err != nil {
+		return PurchaseOrder{}, err
+	}
+	return purchaseOrder, nil
+}
+
+func (s *PostgresStore) CancelPurchaseOrder(ctx context.Context, tenantID, purchaseOrderID string) (PurchaseOrder, error) {
+	purchaseOrder, err := loadPurchaseOrder(ctx, s.pool, tenantID, purchaseOrderID)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	if purchaseOrder.Status != "ordered" {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s is %s, expected ordered", ErrConflict, purchaseOrderID, purchaseOrder.Status)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE purchase_orders
+		SET status = 'cancelled'
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`, tenantID, purchaseOrderID); err != nil {
+		return PurchaseOrder{}, err
+	}
+	purchaseOrder.Status = "cancelled"
+	return purchaseOrder, nil
+}
+
 func (s *PostgresStore) ListStock(ctx context.Context, tenantID string) ([]StockLevel, error) {
 	return listStock(ctx, s.pool, tenantID)
 }
@@ -1463,6 +1772,34 @@ func (s *PostgresStore) TrialBalance(ctx context.Context, tenantID string) ([]Ac
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func loadPurchaseOrder(ctx context.Context, q querier, tenantID, purchaseOrderID string, forUpdate ...bool) (PurchaseOrder, error) {
+	query := `
+		SELECT id::text, supplier_id::text, warehouse_id::text, status,
+		       total_cents, created_at, received_at
+		FROM purchase_orders
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+	`
+	if len(forUpdate) > 0 && forUpdate[0] {
+		query += " FOR UPDATE"
+	}
+	var purchaseOrder PurchaseOrder
+	if err := q.QueryRow(ctx, query, tenantID, purchaseOrderID).Scan(
+		&purchaseOrder.ID,
+		&purchaseOrder.SupplierID,
+		&purchaseOrder.WarehouseID,
+		&purchaseOrder.Status,
+		&purchaseOrder.TotalCents,
+		&purchaseOrder.CreatedAt,
+		&purchaseOrder.ReceivedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s", ErrNotFound, purchaseOrderID)
+		}
+		return PurchaseOrder{}, err
+	}
+	return purchaseOrder, nil
 }
 
 func loadOrder(ctx context.Context, q querier, tenantID, orderID string) (Order, error) {

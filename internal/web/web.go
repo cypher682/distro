@@ -26,6 +26,8 @@ var pageTemplates = []string{
 	"catalog.html",
 	"orders.html",
 	"order.html",
+	"purchasing.html",
+	"purchase_order.html",
 	"invoices.html",
 	"invoice.html",
 	"ledger.html",
@@ -39,37 +41,42 @@ type Server struct {
 }
 
 type pageData struct {
-	Title         string
-	Section       string
-	TenantID      string
-	Flash         string
-	Error         string
-	IsError       bool
-	Today         time.Time
-	Products      []core.Product
-	Warehouses    []core.Warehouse
-	Retailers     []core.Retailer
-	Stock         []core.StockLevel
-	Valuation     core.InventoryValuation
-	Orders        []core.Order
-	Order         core.Order
-	Invoices      []core.Invoice
-	Invoice       core.InvoiceDetail
-	Accounts      []core.AccountBalance
-	Credit        []creditRow
-	EditProduct   *core.Product
-	EditRetailer  *core.Retailer
-	EditWarehouse *core.Warehouse
-	Linked        *core.Invoice
-	ProductsBy    map[string]core.Product
-	RetailersBy   map[string]core.Retailer
-	WarehousesBy  map[string]core.Warehouse
-	ReturnedBy    map[string]int
-	DebitCents    int64
-	CreditCents   int64
-	Balanced      bool
-	OpenCents     int64
-	Returned      int64
+	Title          string
+	Section        string
+	TenantID       string
+	Flash          string
+	Error          string
+	IsError        bool
+	Today          time.Time
+	Products       []core.Product
+	Warehouses     []core.Warehouse
+	Retailers      []core.Retailer
+	Suppliers      []core.Supplier
+	PurchaseOrders []core.PurchaseOrder
+	PurchaseOrder  core.PurchaseOrder
+	Stock          []core.StockLevel
+	Valuation      core.InventoryValuation
+	Orders         []core.Order
+	Order          core.Order
+	Invoices       []core.Invoice
+	Invoice        core.InvoiceDetail
+	Accounts       []core.AccountBalance
+	Credit         []creditRow
+	EditProduct    *core.Product
+	EditRetailer   *core.Retailer
+	EditWarehouse  *core.Warehouse
+	EditSupplier   *core.Supplier
+	Linked         *core.Invoice
+	ProductsBy     map[string]core.Product
+	RetailersBy    map[string]core.Retailer
+	SuppliersBy    map[string]core.Supplier
+	WarehousesBy   map[string]core.Warehouse
+	ReturnedBy     map[string]int
+	DebitCents     int64
+	CreditCents    int64
+	Balanced       bool
+	OpenCents      int64
+	Returned       int64
 }
 
 type creditRow struct {
@@ -100,6 +107,13 @@ func New(svc *core.Service, tenantID string) http.Handler {
 	mux.HandleFunc("POST /catalog/retailers/{id}", server.updateRetailer)
 	mux.HandleFunc("POST /catalog/warehouses", server.createWarehouse)
 	mux.HandleFunc("POST /catalog/warehouses/{id}", server.updateWarehouse)
+	mux.HandleFunc("POST /catalog/suppliers", server.createSupplier)
+	mux.HandleFunc("POST /catalog/suppliers/{id}", server.updateSupplier)
+	mux.HandleFunc("GET /purchasing", server.purchasing)
+	mux.HandleFunc("POST /purchasing", server.createPurchaseOrder)
+	mux.HandleFunc("GET /purchasing/{id}", server.purchaseOrder)
+	mux.HandleFunc("POST /purchasing/{id}/receive", server.receivePurchaseOrder)
+	mux.HandleFunc("POST /purchasing/{id}/cancel", server.cancelPurchaseOrder)
 	mux.HandleFunc("GET /orders", server.orders)
 	mux.HandleFunc("POST /orders", server.createOrder)
 	mux.HandleFunc("GET /orders/{id}", server.order)
@@ -286,11 +300,17 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "Catalog", err)
 		return
 	}
+	suppliers, err := s.svc.ListSuppliers(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Catalog", err)
+		return
+	}
 
 	data := s.page("Catalog", "Catalog", r)
 	data.Products = products
 	data.Retailers = retailers
 	data.Warehouses = warehouses
+	data.Suppliers = suppliers
 	if id := r.URL.Query().Get("edit_product"); id != "" {
 		for i := range products {
 			if products[i].ID == id {
@@ -311,6 +331,14 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 		for i := range warehouses {
 			if warehouses[i].ID == id {
 				data.EditWarehouse = &warehouses[i]
+				break
+			}
+		}
+	}
+	if id := r.URL.Query().Get("edit_supplier"); id != "" {
+		for i := range suppliers {
+			if suppliers[i].ID == id {
+				data.EditSupplier = &suppliers[i]
 				break
 			}
 		}
@@ -413,6 +441,179 @@ func (s *Server) updateWarehouse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirect(w, r, "/catalog", "flash", "Warehouse updated.")
+}
+
+func (s *Server) createSupplier(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, "/catalog", "error", "Could not read the form.")
+		return
+	}
+	input := core.SupplierInput{
+		Name:        r.FormValue("name"),
+		ContactName: r.FormValue("contact_name"),
+		Phone:       r.FormValue("phone"),
+	}
+	if _, err := s.svc.CreateSupplier(r.Context(), s.tenantID, input); err != nil {
+		s.redirect(w, r, "/catalog", "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Supplier created.")
+}
+
+func (s *Server) updateSupplier(w http.ResponseWriter, r *http.Request) {
+	supplierID := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, catalogEdit("supplier", supplierID), "error", "Could not read the form.")
+		return
+	}
+	input := core.SupplierInput{
+		Name:        r.FormValue("name"),
+		ContactName: r.FormValue("contact_name"),
+		Phone:       r.FormValue("phone"),
+	}
+	if _, err := s.svc.UpdateSupplier(r.Context(), s.tenantID, supplierID, input); err != nil {
+		s.redirect(w, r, catalogEdit("supplier", supplierID), "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Supplier updated.")
+}
+
+func (s *Server) purchasing(w http.ResponseWriter, r *http.Request) {
+	purchaseOrders, err := s.svc.ListPurchaseOrders(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchasing", err)
+		return
+	}
+	suppliers, err := s.svc.ListSuppliers(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchasing", err)
+		return
+	}
+	warehouses, err := s.svc.ListWarehouses(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchasing", err)
+		return
+	}
+	products, err := s.svc.ListProducts(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchasing", err)
+		return
+	}
+
+	data := s.page("Purchasing", "Purchasing", r)
+	data.PurchaseOrders = purchaseOrders
+	data.Suppliers = suppliers
+	data.Warehouses = warehouses
+	data.Products = products
+	data.SuppliersBy = supplierMap(suppliers)
+	data.WarehousesBy = warehouseMap(warehouses)
+	data.ProductsBy = productMap(products)
+	s.render(w, "purchasing.html", data)
+}
+
+func (s *Server) purchaseOrder(w http.ResponseWriter, r *http.Request) {
+	purchaseOrder, err := s.svc.GetPurchaseOrder(r.Context(), s.tenantID, r.PathValue("id"))
+	if err != nil {
+		s.failStatus(w, "Purchase order", err)
+		return
+	}
+	suppliers, err := s.svc.ListSuppliers(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchase order", err)
+		return
+	}
+	warehouses, err := s.svc.ListWarehouses(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchase order", err)
+		return
+	}
+	products, err := s.svc.ListProducts(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Purchase order", err)
+		return
+	}
+
+	data := s.page("Purchase order "+shortID(purchaseOrder.ID), "Purchasing", r)
+	data.PurchaseOrder = purchaseOrder
+	data.Suppliers = suppliers
+	data.Warehouses = warehouses
+	data.Products = products
+	data.SuppliersBy = supplierMap(suppliers)
+	data.WarehousesBy = warehouseMap(warehouses)
+	data.ProductsBy = productMap(products)
+	s.render(w, "purchase_order.html", data)
+}
+
+func (s *Server) createPurchaseOrder(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, "/purchasing", "error", "Could not read the form.")
+		return
+	}
+	productIDs := r.Form["product_id"]
+	quantities := r.Form["quantity"]
+	costs := r.Form["unit_cost"]
+	lines := make([]core.CreatePurchaseOrderLine, 0, len(productIDs))
+	for i, productID := range productIDs {
+		productID = strings.TrimSpace(productID)
+		if productID == "" {
+			continue
+		}
+		quantityRaw := ""
+		if i < len(quantities) {
+			quantityRaw = strings.TrimSpace(quantities[i])
+		}
+		costRaw := ""
+		if i < len(costs) {
+			costRaw = strings.TrimSpace(costs[i])
+		}
+		quantity, err := strconv.Atoi(quantityRaw)
+		if err != nil || quantity <= 0 {
+			s.redirect(w, r, "/purchasing", "error", "Each purchase order line needs a product and a positive quantity.")
+			return
+		}
+		cost, err := parseCents(costRaw)
+		if err != nil || cost < 0 {
+			s.redirect(w, r, "/purchasing", "error", "Unit cost must be a valid amount.")
+			return
+		}
+		lines = append(lines, core.CreatePurchaseOrderLine{
+			ProductID:     productID,
+			Quantity:      quantity,
+			UnitCostCents: cost,
+		})
+	}
+	if len(lines) == 0 {
+		s.redirect(w, r, "/purchasing", "error", "Add at least one purchase order line.")
+		return
+	}
+	purchaseOrder, err := s.svc.CreatePurchaseOrder(r.Context(), s.tenantID, core.CreatePurchaseOrderInput{
+		SupplierID:  r.FormValue("supplier_id"),
+		WarehouseID: r.FormValue("warehouse_id"),
+		Lines:       lines,
+	})
+	if err != nil {
+		s.redirect(w, r, "/purchasing", "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/purchasing/"+purchaseOrder.ID, "flash", "Purchase order created.")
+}
+
+func (s *Server) receivePurchaseOrder(w http.ResponseWriter, r *http.Request) {
+	purchaseOrderID := r.PathValue("id")
+	if _, err := s.svc.ReceivePurchaseOrder(r.Context(), s.tenantID, purchaseOrderID); err != nil {
+		s.redirect(w, r, "/purchasing/"+purchaseOrderID, "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/purchasing/"+purchaseOrderID, "flash", "Stock received and payable posted.")
+}
+
+func (s *Server) cancelPurchaseOrder(w http.ResponseWriter, r *http.Request) {
+	purchaseOrderID := r.PathValue("id")
+	if _, err := s.svc.CancelPurchaseOrder(r.Context(), s.tenantID, purchaseOrderID); err != nil {
+		s.redirect(w, r, "/purchasing/"+purchaseOrderID, "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/purchasing/"+purchaseOrderID, "flash", "Purchase order cancelled.")
 }
 
 func (s *Server) orders(w http.ResponseWriter, r *http.Request) {
@@ -831,6 +1032,14 @@ func retailerMap(retailers []core.Retailer) map[string]core.Retailer {
 	return out
 }
 
+func supplierMap(suppliers []core.Supplier) map[string]core.Supplier {
+	out := make(map[string]core.Supplier, len(suppliers))
+	for _, supplier := range suppliers {
+		out[supplier.ID] = supplier
+	}
+	return out
+}
+
 func warehouseMap(warehouses []core.Warehouse) map[string]core.Warehouse {
 	out := make(map[string]core.Warehouse, len(warehouses))
 	for _, warehouse := range warehouses {
@@ -952,6 +1161,13 @@ func (d pageData) RetailerName(id string) string {
 	return shortID(id)
 }
 
+func (d pageData) SupplierName(id string) string {
+	if supplier, ok := d.SuppliersBy[id]; ok {
+		return supplier.Name
+	}
+	return shortID(id)
+}
+
 func (d pageData) WarehouseName(id string) string {
 	if warehouse, ok := d.WarehousesBy[id]; ok {
 		return warehouse.Name
@@ -1022,9 +1238,9 @@ func formatDate(value time.Time) string {
 
 func statusClass(status string) string {
 	switch status {
-	case "paid", "invoiced":
+	case "paid", "invoiced", "received":
 		return "good"
-	case "reserved", "open":
+	case "reserved", "open", "ordered":
 		return "warn"
 	case "cancelled", "void":
 		return "muted"

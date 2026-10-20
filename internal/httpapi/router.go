@@ -187,6 +187,43 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 		writeJSON(w, http.StatusOK, retailer)
 	})
 
+	mux.HandleFunc("GET /api/suppliers", func(w http.ResponseWriter, r *http.Request) {
+		suppliers, err := svc.ListSuppliers(r.Context(), tenantID(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, suppliers)
+	})
+
+	mux.HandleFunc("POST /api/suppliers", func(w http.ResponseWriter, r *http.Request) {
+		var request core.SupplierInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		supplier, err := svc.CreateSupplier(r.Context(), tenantID(r), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, supplier)
+	})
+
+	mux.HandleFunc("PUT /api/suppliers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var request core.SupplierInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		supplier, err := svc.UpdateSupplier(r.Context(), tenantID(r), r.PathValue("id"), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, supplier)
+	})
+
 	mux.HandleFunc("GET /api/stock", func(w http.ResponseWriter, r *http.Request) {
 		stock, err := svc.ListStock(r.Context(), tenantID(r))
 		if err != nil {
@@ -342,6 +379,56 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusCreated, salesReturn)
+	})
+
+	mux.HandleFunc("POST /api/purchase-orders", func(w http.ResponseWriter, r *http.Request) {
+		var request core.CreatePurchaseOrderInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		purchaseOrder, err := svc.CreatePurchaseOrder(r.Context(), tenantID(r), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, purchaseOrder)
+	})
+
+	mux.HandleFunc("GET /api/purchase-orders", func(w http.ResponseWriter, r *http.Request) {
+		purchaseOrders, err := svc.ListPurchaseOrders(r.Context(), tenantID(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, purchaseOrders)
+	})
+
+	mux.HandleFunc("GET /api/purchase-orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		purchaseOrder, err := svc.GetPurchaseOrder(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, purchaseOrder)
+	})
+
+	mux.HandleFunc("POST /api/purchase-orders/{id}/receive", func(w http.ResponseWriter, r *http.Request) {
+		purchaseOrder, err := svc.ReceivePurchaseOrder(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, purchaseOrder)
+	})
+
+	mux.HandleFunc("POST /api/purchase-orders/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		purchaseOrder, err := svc.CancelPurchaseOrder(r.Context(), tenantID(r), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, purchaseOrder)
 	})
 
 	mux.HandleFunc("GET /api/ledger/trial-balance", func(w http.ResponseWriter, r *http.Request) {

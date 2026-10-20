@@ -13,6 +13,7 @@ const (
 	testWarehouse = "00000000-0000-0000-0000-000000000010"
 	testRetailer  = "00000000-0000-0000-0000-000000000020"
 	testProduct   = "00000000-0000-0000-0000-000000000101"
+	testSupplier  = "00000000-0000-0000-0000-000000000030"
 )
 
 func testService(t *testing.T, stock int64, creditLimit int64) (*MemoryStore, *Service) {
@@ -32,6 +33,7 @@ func testService(t *testing.T, stock int64, creditLimit int64) (*MemoryStore, *S
 		Unit:       "bag",
 		PriceCents: 1000,
 	})
+	store.AddSupplier(testTenant, Supplier{ID: testSupplier, Name: "Golden Grain Co."})
 	store.SetStock(testTenant, testProduct, testWarehouse, stock)
 	return store, NewService(store)
 }
@@ -510,6 +512,78 @@ func TestCatalogSetupValidatesAndConflicts(t *testing.T) {
 	}
 	if warehouse.Name != "Overflow" {
 		t.Fatalf("expected trimmed warehouse name, got %+v", warehouse)
+	}
+}
+
+func TestPurchaseOrderReceivePostsStockAndPayable(t *testing.T) {
+	store, svc := testService(t, 10, 100000)
+	store.SetStockValue(testTenant, testProduct, testWarehouse, 10, 10000)
+	ctx := context.Background()
+
+	purchaseOrder, err := svc.CreatePurchaseOrder(ctx, testTenant, CreatePurchaseOrderInput{
+		SupplierID:  testSupplier,
+		WarehouseID: testWarehouse,
+		Lines: []CreatePurchaseOrderLine{
+			{ProductID: testProduct, Quantity: 5, UnitCostCents: 2000},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create purchase order: %v", err)
+	}
+	if purchaseOrder.Status != "ordered" || purchaseOrder.TotalCents != 10000 || len(purchaseOrder.Lines) != 1 {
+		t.Fatalf("unexpected purchase order: %+v", purchaseOrder)
+	}
+
+	received, err := svc.ReceivePurchaseOrder(ctx, testTenant, purchaseOrder.ID)
+	if err != nil {
+		t.Fatalf("receive purchase order: %v", err)
+	}
+	if received.Status != "received" || received.ReceivedAt == nil {
+		t.Fatalf("expected received order, got %+v", received)
+	}
+
+	level := stockLevel(t, store)
+	if level.OnHand != 15 || level.InventoryValueCents != 20000 {
+		t.Fatalf("expected stock 15 at 20000, got %+v", level)
+	}
+	accounts, err := svc.TrialBalance(ctx, testTenant)
+	if err != nil {
+		t.Fatalf("trial balance: %v", err)
+	}
+	var payable int64
+	for _, account := range accounts {
+		if account.Account == "accounts_payable" {
+			payable = account.CreditCents
+		}
+	}
+	if payable != 10000 {
+		t.Fatalf("expected payable 10000, got %d", payable)
+	}
+	assertLedgerBalanced(t, svc)
+
+	if _, err := svc.ReceivePurchaseOrder(ctx, testTenant, purchaseOrder.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected duplicate receive conflict, got %v", err)
+	}
+
+	cancelled, err := svc.CreatePurchaseOrder(ctx, testTenant, CreatePurchaseOrderInput{
+		SupplierID:  testSupplier,
+		WarehouseID: testWarehouse,
+		Lines: []CreatePurchaseOrderLine{
+			{ProductID: testProduct, Quantity: 2, UnitCostCents: 500},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create cancellable order: %v", err)
+	}
+	cancelled, err = svc.CancelPurchaseOrder(ctx, testTenant, cancelled.ID)
+	if err != nil {
+		t.Fatalf("cancel purchase order: %v", err)
+	}
+	if cancelled.Status != "cancelled" {
+		t.Fatalf("expected cancelled order, got %+v", cancelled)
+	}
+	if level := stockLevel(t, store); level.OnHand != 15 {
+		t.Fatalf("expected stock unchanged after cancel, got %+v", level)
 	}
 }
 

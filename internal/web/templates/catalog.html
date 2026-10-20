@@ -72,7 +72,7 @@
   </aside>
 </div>
 
-<div class="grid grid-2">
+<div class="grid grid-3">
   <section class="panel" id="retailers">
     <div class="panel-head">
       <div>
@@ -161,6 +161,60 @@
       <div class="form-actions">
         <button class="button" type="submit">{{if .EditWarehouse}}Save warehouse{{else}}Add warehouse{{end}}</button>
         {{if .EditWarehouse}}<a class="button button-secondary" href="/catalog#warehouses">Cancel</a>{{end}}
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" id="suppliers">
+    <div class="panel-head">
+      <div>
+        <h2>Suppliers</h2>
+        <p>Vendors for purchase orders and inbound stock.</p>
+      </div>
+      <span class="count">{{len .Suppliers}} vendors</span>
+    </div>
+    {{if .Suppliers}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Supplier</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Suppliers}}
+          <tr>
+            <td>
+              <span class="strong">{{.Name}}</span>
+              {{if or .ContactName .Phone}}<small>{{.ContactName}}{{if and .ContactName .Phone}} · {{end}}{{.Phone}}</small>{{end}}
+            </td>
+            <td class="actions"><a class="button button-small button-quiet" href="/catalog?edit_supplier={{.ID}}#suppliers">Edit</a></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No suppliers yet. Add a vendor before purchasing stock.</div>
+    {{end}}
+    <h3 class="form-heading">{{if .EditSupplier}}Edit supplier{{else}}New supplier{{end}}</h3>
+    <form class="form" method="post" action="{{if .EditSupplier}}/catalog/suppliers/{{.EditSupplier.ID}}{{else}}/catalog/suppliers{{end}}">
+      <label>
+        <span>Name</span>
+        <input name="name" type="text" value="{{if .EditSupplier}}{{.EditSupplier.Name}}{{end}}" maxlength="160" required>
+      </label>
+      <label>
+        <span>Contact</span>
+        <input name="contact_name" type="text" value="{{if .EditSupplier}}{{.EditSupplier.ContactName}}{{end}}" maxlength="160">
+      </label>
+      <label>
+        <span>Phone</span>
+        <input name="phone" type="text" value="{{if .EditSupplier}}{{.EditSupplier.Phone}}{{end}}" maxlength="40">
+      </label>
+      <div class="form-actions">
+        <button class="button" type="submit">{{if .EditSupplier}}Save supplier{{else}}Add supplier{{end}}</button>
+        {{if .EditSupplier}}<a class="button button-secondary" href="/catalog#suppliers">Cancel</a>{{end}}
       </div>
     </form>
   </section>

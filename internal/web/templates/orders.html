@@ -69,31 +69,33 @@
         </select>
       </label>
       <div class="field-label">Lines</div>
-      <div class="line-rows" id="order-lines">
-        <div class="line-row">
-          <select name="product_id" aria-label="Product">
-            {{range .Products}}
-            <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
-            {{end}}
-          </select>
-          <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
-          <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+      <div data-line-builder>
+        <div class="line-rows" data-line-rows>
+          <div class="line-row">
+            <select name="product_id" aria-label="Product">
+              {{range .Products}}
+              <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+              {{end}}
+            </select>
+            <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
+            <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+          </div>
         </div>
-      </div>
-      <template id="line-template">
-        <div class="line-row">
-          <select name="product_id" aria-label="Product">
-            {{range .Products}}
-            <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
-            {{end}}
-          </select>
-          <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
-          <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+        <template data-line-template>
+          <div class="line-row">
+            <select name="product_id" aria-label="Product">
+              {{range .Products}}
+              <option value="{{.ID}}">{{.SKU}} · {{.Name}}</option>
+              {{end}}
+            </select>
+            <input name="quantity" type="number" min="1" step="1" value="1" aria-label="Quantity">
+            <button class="button button-quiet button-small" type="button" data-remove-line>Remove</button>
+          </div>
+        </template>
+        <div class="form-actions">
+          <button class="button button-secondary" type="button" data-add-line>Add line</button>
+          <button class="button" type="submit">Create draft</button>
         </div>
-      </template>
-      <div class="form-actions">
-        <button class="button button-secondary" type="button" data-add-line>Add line</button>
-        <button class="button" type="submit">Create draft</button>
       </div>
     </form>
   </aside>
