@@ -23,6 +23,7 @@ var assets embed.FS
 var pageTemplates = []string{
 	"dashboard.html",
 	"inventory.html",
+	"catalog.html",
 	"orders.html",
 	"order.html",
 	"invoices.html",
@@ -38,34 +39,37 @@ type Server struct {
 }
 
 type pageData struct {
-	Title        string
-	Section      string
-	TenantID     string
-	Flash        string
-	Error        string
-	IsError      bool
-	Today        time.Time
-	Products     []core.Product
-	Warehouses   []core.Warehouse
-	Retailers    []core.Retailer
-	Stock        []core.StockLevel
-	Valuation    core.InventoryValuation
-	Orders       []core.Order
-	Order        core.Order
-	Invoices     []core.Invoice
-	Invoice      core.InvoiceDetail
-	Accounts     []core.AccountBalance
-	Credit       []creditRow
-	Linked       *core.Invoice
-	ProductsBy   map[string]core.Product
-	RetailersBy  map[string]core.Retailer
-	WarehousesBy map[string]core.Warehouse
-	ReturnedBy   map[string]int
-	DebitCents   int64
-	CreditCents  int64
-	Balanced     bool
-	OpenCents    int64
-	Returned     int64
+	Title         string
+	Section       string
+	TenantID      string
+	Flash         string
+	Error         string
+	IsError       bool
+	Today         time.Time
+	Products      []core.Product
+	Warehouses    []core.Warehouse
+	Retailers     []core.Retailer
+	Stock         []core.StockLevel
+	Valuation     core.InventoryValuation
+	Orders        []core.Order
+	Order         core.Order
+	Invoices      []core.Invoice
+	Invoice       core.InvoiceDetail
+	Accounts      []core.AccountBalance
+	Credit        []creditRow
+	EditProduct   *core.Product
+	EditRetailer  *core.Retailer
+	EditWarehouse *core.Warehouse
+	Linked        *core.Invoice
+	ProductsBy    map[string]core.Product
+	RetailersBy   map[string]core.Retailer
+	WarehousesBy  map[string]core.Warehouse
+	ReturnedBy    map[string]int
+	DebitCents    int64
+	CreditCents   int64
+	Balanced      bool
+	OpenCents     int64
+	Returned      int64
 }
 
 type creditRow struct {
@@ -89,6 +93,13 @@ func New(svc *core.Service, tenantID string) http.Handler {
 	mux.HandleFunc("GET /{$}", server.dashboard)
 	mux.HandleFunc("GET /inventory", server.inventory)
 	mux.HandleFunc("POST /inventory/receive", server.receiveStock)
+	mux.HandleFunc("GET /catalog", server.catalog)
+	mux.HandleFunc("POST /catalog/products", server.createProduct)
+	mux.HandleFunc("POST /catalog/products/{id}", server.updateProduct)
+	mux.HandleFunc("POST /catalog/retailers", server.createRetailer)
+	mux.HandleFunc("POST /catalog/retailers/{id}", server.updateRetailer)
+	mux.HandleFunc("POST /catalog/warehouses", server.createWarehouse)
+	mux.HandleFunc("POST /catalog/warehouses/{id}", server.updateWarehouse)
 	mux.HandleFunc("GET /orders", server.orders)
 	mux.HandleFunc("POST /orders", server.createOrder)
 	mux.HandleFunc("GET /orders/{id}", server.order)
@@ -110,6 +121,7 @@ func parsePages() map[string]*template.Template {
 		"date":        formatDate,
 		"statusClass": statusClass,
 		"label":       label,
+		"amount":      amount,
 		"add":         func(a, b int64) int64 { return a + b },
 		"sub":         func(a, b int64) int64 { return a - b },
 	}
@@ -256,6 +268,151 @@ func (s *Server) receiveStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirect(w, r, "/inventory", "flash", "Stock movement posted.")
+}
+
+func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
+	products, err := s.svc.ListProducts(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Catalog", err)
+		return
+	}
+	retailers, err := s.svc.ListRetailers(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Catalog", err)
+		return
+	}
+	warehouses, err := s.svc.ListWarehouses(r.Context(), s.tenantID)
+	if err != nil {
+		s.fail(w, "Catalog", err)
+		return
+	}
+
+	data := s.page("Catalog", "Catalog", r)
+	data.Products = products
+	data.Retailers = retailers
+	data.Warehouses = warehouses
+	if id := r.URL.Query().Get("edit_product"); id != "" {
+		for i := range products {
+			if products[i].ID == id {
+				data.EditProduct = &products[i]
+				break
+			}
+		}
+	}
+	if id := r.URL.Query().Get("edit_retailer"); id != "" {
+		for i := range retailers {
+			if retailers[i].ID == id {
+				data.EditRetailer = &retailers[i]
+				break
+			}
+		}
+	}
+	if id := r.URL.Query().Get("edit_warehouse"); id != "" {
+		for i := range warehouses {
+			if warehouses[i].ID == id {
+				data.EditWarehouse = &warehouses[i]
+				break
+			}
+		}
+	}
+	s.render(w, "catalog.html", data)
+}
+
+func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, "/catalog", "error", "Could not read the form.")
+		return
+	}
+	input, err := productInput(r)
+	if err != nil {
+		s.redirect(w, r, "/catalog", "error", "Price must be a valid amount.")
+		return
+	}
+	if _, err := s.svc.CreateProduct(r.Context(), s.tenantID, input); err != nil {
+		s.redirect(w, r, "/catalog", "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Product created.")
+}
+
+func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
+	productID := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, catalogEdit("product", productID), "error", "Could not read the form.")
+		return
+	}
+	input, err := productInput(r)
+	if err != nil {
+		s.redirect(w, r, catalogEdit("product", productID), "error", "Price must be a valid amount.")
+		return
+	}
+	if _, err := s.svc.UpdateProduct(r.Context(), s.tenantID, productID, input); err != nil {
+		s.redirect(w, r, catalogEdit("product", productID), "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Product updated.")
+}
+
+func (s *Server) createRetailer(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, "/catalog", "error", "Could not read the form.")
+		return
+	}
+	input, err := retailerInput(r)
+	if err != nil {
+		s.redirect(w, r, "/catalog", "error", "Credit limit must be a valid amount.")
+		return
+	}
+	if _, err := s.svc.CreateRetailer(r.Context(), s.tenantID, input); err != nil {
+		s.redirect(w, r, "/catalog", "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Retailer created.")
+}
+
+func (s *Server) updateRetailer(w http.ResponseWriter, r *http.Request) {
+	retailerID := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, catalogEdit("retailer", retailerID), "error", "Could not read the form.")
+		return
+	}
+	input, err := retailerInput(r)
+	if err != nil {
+		s.redirect(w, r, catalogEdit("retailer", retailerID), "error", "Credit limit must be a valid amount.")
+		return
+	}
+	if _, err := s.svc.UpdateRetailer(r.Context(), s.tenantID, retailerID, input); err != nil {
+		s.redirect(w, r, catalogEdit("retailer", retailerID), "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Retailer updated.")
+}
+
+func (s *Server) createWarehouse(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, "/catalog", "error", "Could not read the form.")
+		return
+	}
+	input := core.WarehouseInput{Name: r.FormValue("name")}
+	if _, err := s.svc.CreateWarehouse(r.Context(), s.tenantID, input); err != nil {
+		s.redirect(w, r, "/catalog", "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Warehouse created.")
+}
+
+func (s *Server) updateWarehouse(w http.ResponseWriter, r *http.Request) {
+	warehouseID := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, catalogEdit("warehouse", warehouseID), "error", "Could not read the form.")
+		return
+	}
+	input := core.WarehouseInput{Name: r.FormValue("name")}
+	if _, err := s.svc.UpdateWarehouse(r.Context(), s.tenantID, warehouseID, input); err != nil {
+		s.redirect(w, r, catalogEdit("warehouse", warehouseID), "error", publicError(err))
+		return
+	}
+	s.redirect(w, r, "/catalog", "flash", "Warehouse updated.")
 }
 
 func (s *Server) orders(w http.ResponseWriter, r *http.Request) {
@@ -618,6 +775,36 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request, path, key, mes
 	http.Redirect(w, r, u.String(), http.StatusSeeOther)
 }
 
+func productInput(r *http.Request) (core.ProductInput, error) {
+	price, err := parseCents(r.FormValue("price"))
+	if err != nil {
+		return core.ProductInput{}, err
+	}
+	return core.ProductInput{
+		SKU:        r.FormValue("sku"),
+		Name:       r.FormValue("name"),
+		Unit:       r.FormValue("unit"),
+		PriceCents: price,
+	}, nil
+}
+
+func retailerInput(r *http.Request) (core.RetailerInput, error) {
+	limit, err := parseCents(r.FormValue("credit_limit"))
+	if err != nil {
+		return core.RetailerInput{}, err
+	}
+	return core.RetailerInput{
+		Name:             r.FormValue("name"),
+		CreditLimitCents: limit,
+	}, nil
+}
+
+func catalogEdit(kind, id string) string {
+	values := url.Values{}
+	values.Set("edit_"+kind, id)
+	return "/catalog?" + values.Encode()
+}
+
 func publicError(err error) string {
 	switch {
 	case errors.Is(err, core.ErrInvalid), errors.Is(err, core.ErrConflict), errors.Is(err, core.ErrNotFound):
@@ -799,6 +986,15 @@ func (d pageData) InvoiceForOrder(orderID string) *core.Invoice {
 		}
 	}
 	return nil
+}
+
+func amount(cents int64) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
 }
 
 func money(cents int64) string {

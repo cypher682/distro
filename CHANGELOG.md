@@ -18,6 +18,8 @@ All notable changes to this project are documented here. The format follows
   receivable credits, and exact COGS reversal.
 - Server-rendered browser console for stock, orders, invoices, payments,
   returns, and ledger reconciliation.
+- Console catalog setup for products, retailers, and warehouses, backed by
+  create/update API endpoints.
 - Read endpoints for warehouses, orders, invoice lists, and invoice detail.
 - PostgreSQL and in-memory stores, HTTP API, Docker Compose stack, and CI.
 - Architecture, operations, security, contribution, and ADR documentation.

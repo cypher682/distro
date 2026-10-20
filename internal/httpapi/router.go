@@ -85,6 +85,34 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 		writeJSON(w, http.StatusOK, products)
 	})
 
+	mux.HandleFunc("POST /api/products", func(w http.ResponseWriter, r *http.Request) {
+		var request core.ProductInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		product, err := svc.CreateProduct(r.Context(), tenantID(r), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, product)
+	})
+
+	mux.HandleFunc("PUT /api/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var request core.ProductInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		product, err := svc.UpdateProduct(r.Context(), tenantID(r), r.PathValue("id"), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, product)
+	})
+
 	mux.HandleFunc("GET /api/warehouses", func(w http.ResponseWriter, r *http.Request) {
 		warehouses, err := svc.ListWarehouses(r.Context(), tenantID(r))
 		if err != nil {
@@ -94,6 +122,34 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 		writeJSON(w, http.StatusOK, warehouses)
 	})
 
+	mux.HandleFunc("POST /api/warehouses", func(w http.ResponseWriter, r *http.Request) {
+		var request core.WarehouseInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		warehouse, err := svc.CreateWarehouse(r.Context(), tenantID(r), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, warehouse)
+	})
+
+	mux.HandleFunc("PUT /api/warehouses/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var request core.WarehouseInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		warehouse, err := svc.UpdateWarehouse(r.Context(), tenantID(r), r.PathValue("id"), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, warehouse)
+	})
+
 	mux.HandleFunc("GET /api/retailers", func(w http.ResponseWriter, r *http.Request) {
 		retailers, err := svc.ListRetailers(r.Context(), tenantID(r))
 		if err != nil {
@@ -101,6 +157,34 @@ func NewRouter(db Pinger, svc *core.Service) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, retailers)
+	})
+
+	mux.HandleFunc("POST /api/retailers", func(w http.ResponseWriter, r *http.Request) {
+		var request core.RetailerInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		retailer, err := svc.CreateRetailer(r.Context(), tenantID(r), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, retailer)
+	})
+
+	mux.HandleFunc("PUT /api/retailers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var request core.RetailerInput
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, err)
+			return
+		}
+		retailer, err := svc.UpdateRetailer(r.Context(), tenantID(r), r.PathValue("id"), request)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, retailer)
 	})
 
 	mux.HandleFunc("GET /api/stock", func(w http.ResponseWriter, r *http.Request) {

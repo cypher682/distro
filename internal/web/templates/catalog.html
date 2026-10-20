@@ -1,0 +1,168 @@
+{{define "content"}}
+<div class="grid grid-main-side" id="products">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Product catalog</h2>
+        <p>SKUs, selling units, and list prices.</p>
+      </div>
+      <span class="count">{{len .Products}} products</span>
+    </div>
+    {{if .Products}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">SKU</th>
+            <th scope="col">Product</th>
+            <th scope="col">Unit</th>
+            <th scope="col" class="num">Price</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Products}}
+          <tr>
+            <td><span class="strong">{{.SKU}}</span></td>
+            <td>{{.Name}}</td>
+            <td>{{.Unit}}</td>
+            <td class="num">{{money .PriceCents}}</td>
+            <td class="actions"><a class="button button-small button-quiet" href="/catalog?edit_product={{.ID}}#products">Edit</a></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No products yet. Add the first SKU to begin selling.</div>
+    {{end}}
+  </section>
+
+  <aside class="panel panel-sticky">
+    <div class="panel-head">
+      <div>
+        <h2>{{if .EditProduct}}Edit product{{else}}New product{{end}}</h2>
+        <p>{{if .EditProduct}}Update the catalog record.{{else}}Add a sellable SKU and list price.{{end}}</p>
+      </div>
+    </div>
+    <form class="form" method="post" action="{{if .EditProduct}}/catalog/products/{{.EditProduct.ID}}{{else}}/catalog/products{{end}}">
+      <div class="form-row">
+        <label>
+          <span>SKU</span>
+          <input name="sku" type="text" value="{{if .EditProduct}}{{.EditProduct.SKU}}{{end}}" maxlength="64" required>
+        </label>
+        <label>
+          <span>Unit</span>
+          <input name="unit" type="text" value="{{if .EditProduct}}{{.EditProduct.Unit}}{{else}}unit{{end}}" maxlength="32" required>
+        </label>
+      </div>
+      <label>
+        <span>Name</span>
+        <input name="name" type="text" value="{{if .EditProduct}}{{.EditProduct.Name}}{{end}}" maxlength="160" required>
+      </label>
+      <label>
+        <span>List price</span>
+        <input name="price" type="text" inputmode="decimal" value="{{if .EditProduct}}{{amount .EditProduct.PriceCents}}{{end}}" placeholder="0.00" required>
+      </label>
+      <div class="form-actions">
+        <button class="button" type="submit">{{if .EditProduct}}Save product{{else}}Add product{{end}}</button>
+        {{if .EditProduct}}<a class="button button-secondary" href="/catalog#products">Cancel</a>{{end}}
+      </div>
+    </form>
+  </aside>
+</div>
+
+<div class="grid grid-2">
+  <section class="panel" id="retailers">
+    <div class="panel-head">
+      <div>
+        <h2>Retailers</h2>
+        <p>Customer accounts and credit limits.</p>
+      </div>
+      <span class="count">{{len .Retailers}} accounts</span>
+    </div>
+    {{if .Retailers}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Retailer</th>
+            <th scope="col" class="num">Credit limit</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Retailers}}
+          <tr>
+            <td><span class="strong">{{.Name}}</span></td>
+            <td class="num">{{money .CreditLimitCents}}</td>
+            <td class="actions"><a class="button button-small button-quiet" href="/catalog?edit_retailer={{.ID}}#retailers">Edit</a></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No retailers yet. Add an account before creating orders.</div>
+    {{end}}
+    <h3 class="form-heading">{{if .EditRetailer}}Edit retailer{{else}}New retailer{{end}}</h3>
+    <form class="form" method="post" action="{{if .EditRetailer}}/catalog/retailers/{{.EditRetailer.ID}}{{else}}/catalog/retailers{{end}}">
+      <label>
+        <span>Name</span>
+        <input name="name" type="text" value="{{if .EditRetailer}}{{.EditRetailer.Name}}{{end}}" maxlength="160" required>
+      </label>
+      <label>
+        <span>Credit limit</span>
+        <input name="credit_limit" type="text" inputmode="decimal" value="{{if .EditRetailer}}{{amount .EditRetailer.CreditLimitCents}}{{else}}0{{end}}" required>
+      </label>
+      <div class="form-actions">
+        <button class="button" type="submit">{{if .EditRetailer}}Save retailer{{else}}Add retailer{{end}}</button>
+        {{if .EditRetailer}}<a class="button button-secondary" href="/catalog#retailers">Cancel</a>{{end}}
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" id="warehouses">
+    <div class="panel-head">
+      <div>
+        <h2>Warehouses</h2>
+        <p>Stock locations used for receipts and reservations.</p>
+      </div>
+      <span class="count">{{len .Warehouses}} locations</span>
+    </div>
+    {{if .Warehouses}}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Warehouse</th>
+            <th scope="col" class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Warehouses}}
+          <tr>
+            <td><span class="strong">{{.Name}}</span></td>
+            <td class="actions"><a class="button button-small button-quiet" href="/catalog?edit_warehouse={{.ID}}#warehouses">Edit</a></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">No warehouses yet. Add a location before receiving stock.</div>
+    {{end}}
+    <h3 class="form-heading">{{if .EditWarehouse}}Edit warehouse{{else}}New warehouse{{end}}</h3>
+    <form class="form" method="post" action="{{if .EditWarehouse}}/catalog/warehouses/{{.EditWarehouse.ID}}{{else}}/catalog/warehouses{{end}}">
+      <label>
+        <span>Name</span>
+        <input name="name" type="text" value="{{if .EditWarehouse}}{{.EditWarehouse.Name}}{{end}}" maxlength="160" required>
+      </label>
+      <div class="form-actions">
+        <button class="button" type="submit">{{if .EditWarehouse}}Save warehouse{{else}}Add warehouse{{end}}</button>
+        {{if .EditWarehouse}}<a class="button button-secondary" href="/catalog#warehouses">Cancel</a>{{end}}
+      </div>
+    </form>
+  </section>
+</div>
+{{end}}

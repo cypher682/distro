@@ -70,6 +70,7 @@ existing rows. Reset first when a clean state is required.
 Open http://localhost:8081/ after the stack is healthy. The console is pinned to
 the seeded demo tenant and has no authentication. Use it to:
 
+- add or edit products, retailers, and warehouses on the Catalog page;
 - receive stock or post a negative adjustment;
 - create a draft order, reserve it, cancel it, or issue an invoice;
 - record a payment or return goods with or without restocking;
@@ -102,6 +103,10 @@ curl -s http://localhost:8081/api/inventory/valuation | jq
 Both responses must contain `"balanced": true`. On a clean seed, inventory value
 is `2100000` cents. After an invoice, restocked return, and payment, the trial
 balance must still reconcile and inventory must equal the ledger balance.
+
+To verify catalog setup, open `/catalog`, create a product, retailer, and
+warehouse, then edit the product and confirm the new values appear in the order
+and receipt forms.
 
 To verify the console manually, open `/`, create and reserve an order, invoice
 it, record a partial payment, then return one unit from the invoice page. The

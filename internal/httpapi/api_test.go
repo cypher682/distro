@@ -341,6 +341,64 @@ func TestInventoryValuationEndpointReconciles(t *testing.T) {
 	}
 }
 
+func TestCatalogEndpointsCreateAndUpdate(t *testing.T) {
+	router := apiRouter()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/products", strings.NewReader(`{
+		"sku": "oil-5", "name": "Cooking oil 5L", "unit": "bottle", "price_cents": 1250
+	}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create product: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	var product core.Product
+	if err := json.NewDecoder(createRec.Body).Decode(&product); err != nil {
+		t.Fatalf("decode product: %v", err)
+	}
+	if product.ID == "" || product.PriceCents != 1250 {
+		t.Fatalf("unexpected product: %+v", product)
+	}
+
+	duplicate := httptest.NewRequest(http.MethodPost, "/api/products", strings.NewReader(`{
+		"sku": "oil-5", "name": "Another oil", "unit": "bottle", "price_cents": 900
+	}`))
+	duplicate.Header.Set("Content-Type", "application/json")
+	duplicateRec := httptest.NewRecorder()
+	router.ServeHTTP(duplicateRec, duplicate)
+	if duplicateRec.Code != http.StatusConflict {
+		t.Fatalf("duplicate sku: expected 409, got %d: %s", duplicateRec.Code, duplicateRec.Body.String())
+	}
+
+	update := httptest.NewRequest(http.MethodPut, "/api/products/"+product.ID, strings.NewReader(`{
+		"sku": "oil-5", "name": "Cooking oil 5L", "unit": "bottle", "price_cents": 1400
+	}`))
+	update.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	router.ServeHTTP(updateRec, update)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update product: expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodPost, "/api/retailers", strings.NewReader(`{"name": "  "}`))
+	invalid.Header.Set("Content-Type", "application/json")
+	invalidRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidRec, invalid)
+	if invalidRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid retailer: expected 400, got %d: %s", invalidRec.Code, invalidRec.Body.String())
+	}
+
+	warehouse := httptest.NewRequest(http.MethodPost, "/api/warehouses", strings.NewReader(`{"name": "Overflow"}`))
+	warehouse.Header.Set("Content-Type", "application/json")
+	warehouseRec := httptest.NewRecorder()
+	router.ServeHTTP(warehouseRec, warehouse)
+	if warehouseRec.Code != http.StatusCreated {
+		t.Fatalf("create warehouse: expected 201, got %d: %s", warehouseRec.Code, warehouseRec.Body.String())
+	}
+}
+
 func TestReserveOversellReturnsConflict(t *testing.T) {
 	router := apiRouter()
 

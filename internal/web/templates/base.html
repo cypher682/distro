@@ -16,6 +16,7 @@
       </a>
       <nav class="nav" aria-label="Main">
         <a href="/" {{if eq .Section "Overview"}}aria-current="page"{{end}}>Overview</a>
+        <a href="/catalog" {{if eq .Section "Catalog"}}aria-current="page"{{end}}>Catalog</a>
         <a href="/inventory" {{if eq .Section "Inventory"}}aria-current="page"{{end}}>Inventory</a>
         <a href="/orders" {{if eq .Section "Orders"}}aria-current="page"{{end}}>Orders</a>
         <a href="/invoices" {{if eq .Section "Invoices"}}aria-current="page"{{end}}>Invoices</a>

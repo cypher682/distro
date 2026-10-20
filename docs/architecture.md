@@ -86,6 +86,9 @@ See [ADR-0002](adr/0002-core-money-and-stock.md),
 | Route | Purpose |
 |---|---|
 | `GET /` | Stock, receivables, ledger, and recent invoice overview |
+| `GET /catalog` | Product, retailer, and warehouse setup with create/edit forms |
+| `POST /catalog/{products,retailers,warehouses}` | Create a catalog record |
+| `POST /catalog/{products,retailers,warehouses}/{id}` | Update a catalog record |
 | `GET /inventory` | Stock levels, valuation, and receive/adjust form |
 | `POST /inventory/receive` | Post a receipt or negative adjustment |
 | `GET /orders`, `POST /orders` | Order register and draft creation |

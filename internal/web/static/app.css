@@ -553,6 +553,19 @@ small {
   width: 100%;
 }
 
+.form-heading {
+  margin: 0;
+  padding: 15px 18px 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.form-heading + .form {
+  padding-top: 11px;
+}
+
 .form {
   display: flex;
   flex-direction: column;

@@ -21,6 +21,31 @@ func (s *Service) ListProducts(ctx context.Context, tenantID string) ([]Product,
 	return s.store.ListProducts(ctx, tenantID)
 }
 
+func (s *Service) CreateProduct(ctx context.Context, tenantID string, input ProductInput) (Product, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Product{}, err
+	}
+	clean, err := cleanProductInput(input)
+	if err != nil {
+		return Product{}, err
+	}
+	return s.store.CreateProduct(ctx, tenantID, clean)
+}
+
+func (s *Service) UpdateProduct(ctx context.Context, tenantID, productID string, input ProductInput) (Product, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Product{}, err
+	}
+	if productID == "" {
+		return Product{}, fmt.Errorf("%w: product_id is required", ErrInvalid)
+	}
+	clean, err := cleanProductInput(input)
+	if err != nil {
+		return Product{}, err
+	}
+	return s.store.UpdateProduct(ctx, tenantID, productID, clean)
+}
+
 func (s *Service) ListWarehouses(ctx context.Context, tenantID string) ([]Warehouse, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return nil, err
@@ -28,11 +53,61 @@ func (s *Service) ListWarehouses(ctx context.Context, tenantID string) ([]Wareho
 	return s.store.ListWarehouses(ctx, tenantID)
 }
 
+func (s *Service) CreateWarehouse(ctx context.Context, tenantID string, input WarehouseInput) (Warehouse, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Warehouse{}, err
+	}
+	clean, err := cleanWarehouseInput(input)
+	if err != nil {
+		return Warehouse{}, err
+	}
+	return s.store.CreateWarehouse(ctx, tenantID, clean)
+}
+
+func (s *Service) UpdateWarehouse(ctx context.Context, tenantID, warehouseID string, input WarehouseInput) (Warehouse, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Warehouse{}, err
+	}
+	if warehouseID == "" {
+		return Warehouse{}, fmt.Errorf("%w: warehouse_id is required", ErrInvalid)
+	}
+	clean, err := cleanWarehouseInput(input)
+	if err != nil {
+		return Warehouse{}, err
+	}
+	return s.store.UpdateWarehouse(ctx, tenantID, warehouseID, clean)
+}
+
 func (s *Service) ListRetailers(ctx context.Context, tenantID string) ([]Retailer, error) {
 	if err := requireTenant(tenantID); err != nil {
 		return nil, err
 	}
 	return s.store.ListRetailers(ctx, tenantID)
+}
+
+func (s *Service) CreateRetailer(ctx context.Context, tenantID string, input RetailerInput) (Retailer, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Retailer{}, err
+	}
+	clean, err := cleanRetailerInput(input)
+	if err != nil {
+		return Retailer{}, err
+	}
+	return s.store.CreateRetailer(ctx, tenantID, clean)
+}
+
+func (s *Service) UpdateRetailer(ctx context.Context, tenantID, retailerID string, input RetailerInput) (Retailer, error) {
+	if err := requireTenant(tenantID); err != nil {
+		return Retailer{}, err
+	}
+	if retailerID == "" {
+		return Retailer{}, fmt.Errorf("%w: retailer_id is required", ErrInvalid)
+	}
+	clean, err := cleanRetailerInput(input)
+	if err != nil {
+		return Retailer{}, err
+	}
+	return s.store.UpdateRetailer(ctx, tenantID, retailerID, clean)
 }
 
 func (s *Service) ListStock(ctx context.Context, tenantID string) ([]StockLevel, error) {
@@ -223,6 +298,54 @@ func (s *Service) TrialBalance(ctx context.Context, tenantID string) ([]AccountB
 		return nil, err
 	}
 	return s.store.TrialBalance(ctx, tenantID)
+}
+
+func cleanProductInput(input ProductInput) (ProductInput, error) {
+	input.SKU = strings.TrimSpace(input.SKU)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Unit = strings.TrimSpace(input.Unit)
+	if input.Unit == "" {
+		input.Unit = "unit"
+	}
+	switch {
+	case input.SKU == "":
+		return ProductInput{}, fmt.Errorf("%w: sku is required", ErrInvalid)
+	case len(input.SKU) > 64:
+		return ProductInput{}, fmt.Errorf("%w: sku must be 64 characters or fewer", ErrInvalid)
+	case input.Name == "":
+		return ProductInput{}, fmt.Errorf("%w: product name is required", ErrInvalid)
+	case len(input.Name) > 160:
+		return ProductInput{}, fmt.Errorf("%w: product name must be 160 characters or fewer", ErrInvalid)
+	case len(input.Unit) > 32:
+		return ProductInput{}, fmt.Errorf("%w: unit must be 32 characters or fewer", ErrInvalid)
+	case input.PriceCents < 0:
+		return ProductInput{}, fmt.Errorf("%w: price_cents must not be negative", ErrInvalid)
+	}
+	return input, nil
+}
+
+func cleanRetailerInput(input RetailerInput) (RetailerInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	switch {
+	case input.Name == "":
+		return RetailerInput{}, fmt.Errorf("%w: retailer name is required", ErrInvalid)
+	case len(input.Name) > 160:
+		return RetailerInput{}, fmt.Errorf("%w: retailer name must be 160 characters or fewer", ErrInvalid)
+	case input.CreditLimitCents < 0:
+		return RetailerInput{}, fmt.Errorf("%w: credit_limit_cents must not be negative", ErrInvalid)
+	}
+	return input, nil
+}
+
+func cleanWarehouseInput(input WarehouseInput) (WarehouseInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	switch {
+	case input.Name == "":
+		return WarehouseInput{}, fmt.Errorf("%w: warehouse name is required", ErrInvalid)
+	case len(input.Name) > 160:
+		return WarehouseInput{}, fmt.Errorf("%w: warehouse name must be 160 characters or fewer", ErrInvalid)
+	}
+	return input, nil
 }
 
 func requireTenant(tenantID string) error {

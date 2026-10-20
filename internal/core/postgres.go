@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -45,6 +46,54 @@ func (s *PostgresStore) ListProducts(ctx context.Context, tenantID string) ([]Pr
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) CreateProduct(ctx context.Context, tenantID string, input ProductInput) (Product, error) {
+	var product Product
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO products (tenant_id, sku, name, unit, price_cents)
+		VALUES ($1::uuid, $2, $3, $4, $5)
+		RETURNING id::text, sku, name, unit, price_cents
+	`, tenantID, input.SKU, input.Name, input.Unit, input.PriceCents).Scan(
+		&product.ID,
+		&product.SKU,
+		&product.Name,
+		&product.Unit,
+		&product.PriceCents,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Product{}, fmt.Errorf("%w: sku %s already exists", ErrConflict, input.SKU)
+		}
+		return Product{}, err
+	}
+	return product, nil
+}
+
+func (s *PostgresStore) UpdateProduct(ctx context.Context, tenantID, productID string, input ProductInput) (Product, error) {
+	var product Product
+	err := s.pool.QueryRow(ctx, `
+		UPDATE products
+		SET sku = $3, name = $4, unit = $5, price_cents = $6
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		RETURNING id::text, sku, name, unit, price_cents
+	`, tenantID, productID, input.SKU, input.Name, input.Unit, input.PriceCents).Scan(
+		&product.ID,
+		&product.SKU,
+		&product.Name,
+		&product.Unit,
+		&product.PriceCents,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Product{}, fmt.Errorf("%w: product %s", ErrNotFound, productID)
+		}
+		if isUniqueViolation(err) {
+			return Product{}, fmt.Errorf("%w: sku %s already exists", ErrConflict, input.SKU)
+		}
+		return Product{}, err
+	}
+	return product, nil
+}
+
 func (s *PostgresStore) ListWarehouses(ctx context.Context, tenantID string) ([]Warehouse, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name
@@ -68,6 +117,30 @@ func (s *PostgresStore) ListWarehouses(ctx context.Context, tenantID string) ([]
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) CreateWarehouse(ctx context.Context, tenantID string, input WarehouseInput) (Warehouse, error) {
+	var warehouse Warehouse
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO warehouses (tenant_id, name)
+		VALUES ($1::uuid, $2)
+		RETURNING id::text, name
+	`, tenantID, input.Name).Scan(&warehouse.ID, &warehouse.Name)
+	return warehouse, err
+}
+
+func (s *PostgresStore) UpdateWarehouse(ctx context.Context, tenantID, warehouseID string, input WarehouseInput) (Warehouse, error) {
+	var warehouse Warehouse
+	err := s.pool.QueryRow(ctx, `
+		UPDATE warehouses
+		SET name = $3
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		RETURNING id::text, name
+	`, tenantID, warehouseID, input.Name).Scan(&warehouse.ID, &warehouse.Name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Warehouse{}, fmt.Errorf("%w: warehouse %s", ErrNotFound, warehouseID)
+	}
+	return warehouse, err
+}
+
 func (s *PostgresStore) ListRetailers(ctx context.Context, tenantID string) ([]Retailer, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, credit_limit_cents
@@ -89,6 +162,38 @@ func (s *PostgresStore) ListRetailers(ctx context.Context, tenantID string) ([]R
 		out = append(out, retailer)
 	}
 	return out, rows.Err()
+}
+
+func (s *PostgresStore) CreateRetailer(ctx context.Context, tenantID string, input RetailerInput) (Retailer, error) {
+	var retailer Retailer
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO retailers (tenant_id, name, credit_limit_cents)
+		VALUES ($1::uuid, $2, $3)
+		RETURNING id::text, name, credit_limit_cents
+	`, tenantID, input.Name, input.CreditLimitCents).Scan(
+		&retailer.ID,
+		&retailer.Name,
+		&retailer.CreditLimitCents,
+	)
+	return retailer, err
+}
+
+func (s *PostgresStore) UpdateRetailer(ctx context.Context, tenantID, retailerID string, input RetailerInput) (Retailer, error) {
+	var retailer Retailer
+	err := s.pool.QueryRow(ctx, `
+		UPDATE retailers
+		SET name = $3, credit_limit_cents = $4
+		WHERE tenant_id = $1::uuid AND id = $2::uuid
+		RETURNING id::text, name, credit_limit_cents
+	`, tenantID, retailerID, input.Name, input.CreditLimitCents).Scan(
+		&retailer.ID,
+		&retailer.Name,
+		&retailer.CreditLimitCents,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Retailer{}, fmt.Errorf("%w: retailer %s", ErrNotFound, retailerID)
+	}
+	return retailer, err
 }
 
 func (s *PostgresStore) ListStock(ctx context.Context, tenantID string) ([]StockLevel, error) {
@@ -1353,6 +1458,11 @@ func (s *PostgresStore) TrialBalance(ctx context.Context, tenantID string) ([]Ac
 		out = append(out, balance)
 	}
 	return out, rows.Err()
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func loadOrder(ctx context.Context, q querier, tenantID, orderID string) (Order, error) {

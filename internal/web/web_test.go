@@ -46,6 +46,7 @@ func TestPagesRender(t *testing.T) {
 		want string
 	}{
 		{"/", "Recent invoices"},
+		{"/catalog", "Product catalog"},
 		{"/inventory", "Stock ledger"},
 		{"/orders", "Order register"},
 		{"/invoices", "Receivables"},
@@ -138,6 +139,88 @@ func TestOrderInvoiceReturnFlow(t *testing.T) {
 	server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ledger", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Balanced") {
 		t.Fatalf("ledger: expected balanced page, got %d", rec.Code)
+	}
+}
+
+func TestCatalogSetupFlow(t *testing.T) {
+	server, store, service := testServer(t)
+
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, formRequest(http.MethodPost, "/catalog/products", url.Values{
+		"sku":   {"OIL-5"},
+		"name":  {"Cooking oil 5L"},
+		"unit":  {"bottle"},
+		"price": {"12.50"},
+	}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create product: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	products, err := service.ListProducts(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("list products: %v", err)
+	}
+	var created core.Product
+	for _, product := range products {
+		if product.SKU == "OIL-5" {
+			created = product
+		}
+	}
+	if created.ID == "" || created.PriceCents != 1250 || created.Unit != "bottle" {
+		t.Fatalf("unexpected product: %+v", created)
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, formRequest(http.MethodPost, "/catalog/retailers", url.Values{
+		"name":         {"North Market"},
+		"credit_limit": {"2500"},
+	}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create retailer: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, formRequest(http.MethodPost, "/catalog/warehouses", url.Values{
+		"name": {"Overflow"},
+	}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create warehouse: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog?edit_product="+created.ID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("edit page: expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Edit product", `value="OIL-5"`, `value="12.50"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("edit page: missing %q", want)
+		}
+	}
+
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, formRequest(http.MethodPost, "/catalog/products/"+created.ID, url.Values{
+		"sku":   {"OIL-5"},
+		"name":  {"Cooking oil 5L"},
+		"unit":  {"case"},
+		"price": {"13.00"},
+	}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("update product: expected 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	products, err = store.ListProducts(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("list products: %v", err)
+	}
+	var updated core.Product
+	for _, product := range products {
+		if product.ID == created.ID {
+			updated = product
+		}
+	}
+	if updated.Unit != "case" || updated.PriceCents != 1300 {
+		t.Fatalf("unexpected updated product: %+v", updated)
 	}
 }
 

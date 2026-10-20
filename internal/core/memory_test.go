@@ -460,6 +460,59 @@ func TestReceiveStockRequiresReceiptCost(t *testing.T) {
 	}
 }
 
+func TestCatalogSetupValidatesAndConflicts(t *testing.T) {
+	_, svc := testService(t, 0, 100000)
+	ctx := context.Background()
+
+	product, err := svc.CreateProduct(ctx, testTenant, ProductInput{
+		SKU:        "  OIL-5  ",
+		Name:       "  Cooking oil 5L  ",
+		PriceCents: 1250,
+	})
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	if product.SKU != "OIL-5" || product.Name != "Cooking oil 5L" || product.Unit != "unit" {
+		t.Fatalf("expected trimmed input and default unit, got %+v", product)
+	}
+
+	if _, err := svc.CreateProduct(ctx, testTenant, ProductInput{SKU: "OIL-5", Name: "Duplicate"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected duplicate sku conflict, got %v", err)
+	}
+	if _, err := svc.CreateProduct(ctx, testTenant, ProductInput{SKU: "", Name: "No SKU"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected missing sku invalid, got %v", err)
+	}
+
+	updated, err := svc.UpdateProduct(ctx, testTenant, product.ID, ProductInput{
+		SKU:        "OIL-5",
+		Name:       "Cooking oil 5L",
+		Unit:       "bottle",
+		PriceCents: 1300,
+	})
+	if err != nil {
+		t.Fatalf("update product: %v", err)
+	}
+	if updated.Unit != "bottle" || updated.PriceCents != 1300 {
+		t.Fatalf("unexpected updated product: %+v", updated)
+	}
+
+	retailer, err := svc.CreateRetailer(ctx, testTenant, RetailerInput{Name: "  North Market  ", CreditLimitCents: 5000})
+	if err != nil {
+		t.Fatalf("create retailer: %v", err)
+	}
+	if retailer.Name != "North Market" {
+		t.Fatalf("expected trimmed retailer name, got %+v", retailer)
+	}
+
+	warehouse, err := svc.CreateWarehouse(ctx, testTenant, WarehouseInput{Name: "  Overflow  "})
+	if err != nil {
+		t.Fatalf("create warehouse: %v", err)
+	}
+	if warehouse.Name != "Overflow" {
+		t.Fatalf("expected trimmed warehouse name, got %+v", warehouse)
+	}
+}
+
 func stockLevel(t *testing.T, store *MemoryStore) StockLevel {
 	t.Helper()
 

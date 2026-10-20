@@ -19,6 +19,22 @@ type Product struct {
 	PriceCents int64  `json:"price_cents"`
 }
 
+type ProductInput struct {
+	SKU        string `json:"sku"`
+	Name       string `json:"name"`
+	Unit       string `json:"unit"`
+	PriceCents int64  `json:"price_cents"`
+}
+
+type RetailerInput struct {
+	Name             string `json:"name"`
+	CreditLimitCents int64  `json:"credit_limit_cents"`
+}
+
+type WarehouseInput struct {
+	Name string `json:"name"`
+}
+
 type Warehouse struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

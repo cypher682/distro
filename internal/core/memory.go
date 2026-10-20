@@ -22,6 +22,7 @@ type MemoryStore struct {
 	payments      map[string]map[string]*Payment
 	returns       map[string]map[string]*SalesReturn
 	ledger        []memoryLedgerEntry
+	nextID        uint64
 }
 
 type memoryReservation struct {
@@ -108,6 +109,49 @@ func (m *MemoryStore) ListProducts(_ context.Context, tenantID string) ([]Produc
 	return out, nil
 }
 
+func (m *MemoryStore) CreateProduct(_ context.Context, tenantID string, input ProductInput) (Product, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	products := m.tenantProducts(tenantID)
+	for _, product := range products {
+		if product.SKU == input.SKU {
+			return Product{}, fmt.Errorf("%w: sku %s already exists", ErrConflict, input.SKU)
+		}
+	}
+	product := Product{
+		ID:         m.newID(),
+		SKU:        input.SKU,
+		Name:       input.Name,
+		Unit:       input.Unit,
+		PriceCents: input.PriceCents,
+	}
+	products[product.ID] = product
+	return product, nil
+}
+
+func (m *MemoryStore) UpdateProduct(_ context.Context, tenantID, productID string, input ProductInput) (Product, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	products := m.tenantProducts(tenantID)
+	product, ok := products[productID]
+	if !ok {
+		return Product{}, fmt.Errorf("%w: product %s", ErrNotFound, productID)
+	}
+	for id, other := range products {
+		if id != productID && other.SKU == input.SKU {
+			return Product{}, fmt.Errorf("%w: sku %s already exists", ErrConflict, input.SKU)
+		}
+	}
+	product.SKU = input.SKU
+	product.Name = input.Name
+	product.Unit = input.Unit
+	product.PriceCents = input.PriceCents
+	products[productID] = product
+	return product, nil
+}
+
 func (m *MemoryStore) ListWarehouses(_ context.Context, tenantID string) ([]Warehouse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +164,27 @@ func (m *MemoryStore) ListWarehouses(_ context.Context, tenantID string) ([]Ware
 	return out, nil
 }
 
+func (m *MemoryStore) CreateWarehouse(_ context.Context, tenantID string, input WarehouseInput) (Warehouse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	warehouse := Warehouse{ID: m.newID(), Name: input.Name}
+	m.tenantWarehouses(tenantID)[warehouse.ID] = warehouse.Name
+	return warehouse, nil
+}
+
+func (m *MemoryStore) UpdateWarehouse(_ context.Context, tenantID, warehouseID string, input WarehouseInput) (Warehouse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	warehouses := m.tenantWarehouses(tenantID)
+	if _, ok := warehouses[warehouseID]; !ok {
+		return Warehouse{}, fmt.Errorf("%w: warehouse %s", ErrNotFound, warehouseID)
+	}
+	warehouses[warehouseID] = input.Name
+	return Warehouse{ID: warehouseID, Name: input.Name}, nil
+}
+
 func (m *MemoryStore) ListRetailers(_ context.Context, tenantID string) ([]Retailer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -130,6 +195,34 @@ func (m *MemoryStore) ListRetailers(_ context.Context, tenantID string) ([]Retai
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+func (m *MemoryStore) CreateRetailer(_ context.Context, tenantID string, input RetailerInput) (Retailer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	retailer := Retailer{
+		ID:               m.newID(),
+		Name:             input.Name,
+		CreditLimitCents: input.CreditLimitCents,
+	}
+	m.tenantRetailers(tenantID)[retailer.ID] = retailer
+	return retailer, nil
+}
+
+func (m *MemoryStore) UpdateRetailer(_ context.Context, tenantID, retailerID string, input RetailerInput) (Retailer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	retailers := m.tenantRetailers(tenantID)
+	retailer, ok := retailers[retailerID]
+	if !ok {
+		return Retailer{}, fmt.Errorf("%w: retailer %s", ErrNotFound, retailerID)
+	}
+	retailer.Name = input.Name
+	retailer.CreditLimitCents = input.CreditLimitCents
+	retailers[retailerID] = retailer
+	return retailer, nil
 }
 
 func (m *MemoryStore) ListStock(_ context.Context, tenantID string) ([]StockLevel, error) {
@@ -850,4 +943,9 @@ func cloneInvoice(invoice Invoice) Invoice {
 func cloneSalesReturn(salesReturn SalesReturn) SalesReturn {
 	salesReturn.Lines = append([]SalesReturnLine(nil), salesReturn.Lines...)
 	return salesReturn
+}
+
+func (m *MemoryStore) newID() string {
+	m.nextID++
+	return fmt.Sprintf("00000000-0000-4000-8000-%012d", m.nextID)
 }

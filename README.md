@@ -4,7 +4,8 @@ MVP scaffold for the distributor and wholesale commerce platform.
 
 ## MVP scope
 
-- multi-tenant catalog and pricing
+- multi-tenant catalog and pricing, with console setup for products,
+  retailers, and warehouses
 - append-only stock movements and reservations
 - order lifecycle and credit exposure
 - weighted-average inventory costing and cost of goods sold
@@ -43,9 +44,10 @@ change.
 
 ## Demo flow
 
-Open http://localhost:8081/ to receive stock, create and reserve orders, issue
-invoices, record payments, and post returns in the console. The same flow is
-available over the API:
+Open http://localhost:8081/ to set up products, retailers, and warehouses, then
+receive stock, create and reserve orders, issue invoices, record payments, and
+post returns in the console. Catalog records can also be created from the
+Catalog page without SQL. The same flow is available over the API:
 
 ```bash
 # Catalog and stock
@@ -89,8 +91,14 @@ response reconciles on-hand stock value, the inventory account, and posted COGS.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/products` | List catalog products |
+| POST | `/api/products` | Create a product |
+| PUT | `/api/products/{id}` | Update a product |
 | GET | `/api/warehouses` | List stock locations |
+| POST | `/api/warehouses` | Create a warehouse |
+| PUT | `/api/warehouses/{id}` | Rename a warehouse |
 | GET | `/api/retailers` | List retailers and credit limits |
+| POST | `/api/retailers` | Create a retailer |
+| PUT | `/api/retailers/{id}` | Update a retailer |
 | GET | `/api/stock` | On-hand, reserved, available, and valued stock |
 | GET | `/api/inventory/valuation` | Inventory value, COGS, and ledger reconciliation |
 | POST | `/api/stock/receive` | Receive stock with unit cost or apply a stock adjustment |
@@ -108,6 +116,10 @@ response reconciles on-hand stock value, the inventory account, and posted COGS.
 | GET | `/api/ledger/trial-balance` | Account balances and balance check |
 
 Requests use `X-Tenant-ID`; it defaults to the seeded demo tenant.
+
+Catalog write bodies use `sku`, `name`, `unit`, and `price_cents` for products,
+`name` and `credit_limit_cents` for retailers, and `name` for warehouses. SKUs
+are unique per tenant.
 
 Stock receipts use a positive `quantity` and `unit_cost_cents`. Negative
 quantities are adjustments: they are valued at the current weighted average,
